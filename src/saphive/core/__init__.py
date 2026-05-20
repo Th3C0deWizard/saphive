@@ -10,7 +10,7 @@ from saphive.core.config import (
     load_config,
     load_default_config,
 )
-from saphive.core.context import SapContext
+from saphive.core.context import RuntimePaths, SapContext, SapGuiPlaceholder, build_sap_context
 from saphive.core.errors import (
     ConfigurationError,
     SapConnectionError,
@@ -33,12 +33,14 @@ __all__ = [
     "LoggingConfig",
     "PathsConfig",
     "RuntimeConfig",
+    "RuntimePaths",
     "SAPHiveConfig",
     "SAPHiveError",
     "SapConfig",
     "SapConnectionError",
     "SapContext",
     "SapGuiError",
+    "SapGuiPlaceholder",
     "SapRuntime",
     "SapSessionError",
     "ScriptContractError",
@@ -48,6 +50,7 @@ __all__ = [
     "ScriptLoadError",
     "ScriptMetadata",
     "ScriptValidationError",
+    "build_sap_context",
     "find_default_config",
     "load_config",
     "load_default_config",

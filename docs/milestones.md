@@ -145,18 +145,18 @@ Exit criteria:
 
 ## Milestone 7: Runtime Context
 
-Status: not started
+Status: complete
 
 Checklist:
 
-- [ ] Create `SapContext` from runtime inputs.
-- [ ] Attach config to context.
-- [ ] Attach script metadata to context.
-- [ ] Attach logger to context.
-- [ ] Attach run ID to context.
-- [ ] Attach working paths to context.
-- [ ] Attach SAP abstraction placeholder or lazy session object.
-- [ ] Add unit tests for context construction.
+- [x] Create `SapContext` from runtime inputs.
+- [x] Attach config to context.
+- [x] Attach script metadata to context.
+- [x] Attach logger to context.
+- [x] Attach run ID to context.
+- [x] Attach working paths to context.
+- [x] Attach SAP abstraction placeholder or lazy session object.
+- [x] Add unit tests for context construction.
 
 Exit criteria:
 
