@@ -1,0 +1,24 @@
+[paths]
+scripts = ["."]
+
+[runtime]
+default_timeout_seconds = 300
+
+[logging]
+level = "INFO"
+directory = "../logs"
+jsonl_enabled = false
+
+[sap]
+mode = "auto"
+connection = "prd"
+
+[sap.connections.prd]
+sap_logon_name = "3 PRODUCTIVO (PRD)"
+client = "300"
+language = "ES"
+
+[sap.connections.qas]
+sap_logon_name = "QAS"
+client = "200"
+language = "EN"
