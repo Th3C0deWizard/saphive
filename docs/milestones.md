@@ -127,16 +127,16 @@ Exit criteria:
 
 ## Milestone 6: Script Loading
 
-Status: not started
+Status: complete
 
 Checklist:
 
-- [ ] Load script by registry name.
-- [ ] Load script by explicit file path.
-- [ ] Load script by package directory.
-- [ ] Validate contract after loading.
-- [ ] Return loaded script object or equivalent runtime representation.
-- [ ] Add tests for load success and load failure paths.
+- [x] Load script by registry name.
+- [x] Load script by explicit file path.
+- [x] Load script by package directory.
+- [x] Validate contract after loading.
+- [x] Return loaded script object or equivalent runtime representation.
+- [x] Add tests for load success and load failure paths.
 
 Exit criteria:
 
