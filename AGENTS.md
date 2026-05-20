@@ -4,15 +4,19 @@ SAPHive is a lightweight internal Python runtime and SDK for SAP GUI Scripting a
 
 ## Current Phase
 
-The project is in the planning and architecture phase unless the user explicitly asks for implementation work.
+The project is in the pre-alpha implementation and internal publication preparation phase.
 
-Do not add runtime code, package modules, or automation scripts unless requested.
+Runtime code, package modules, docs, and example automation scripts may be updated when explicitly requested by the user.
 
 ## Architectural Rules
 
 - SAPHive Core owns script discovery, loading, validation, execution, logging, configuration, error handling, and SAP abstraction.
 - SAPHive CLI must remain a thin frontend over SAPHive Core.
 - Automation scripts are external runtime-executed SAPHive scripts.
+- Core/CLI should resolve the SAP connection for a script run using `auto`, `attach`, or `open` mode.
+- User-written SAPHive scripts should manage SAP sessions explicitly through connection-scoped APIs exposed on `ctx.sap`.
+- Scripts should not choose or open SAP connections directly unless a later explicit requirement changes this boundary.
+- For independent automation bots, prefer creating or attaching to a dedicated SAP session inside the selected connection rather than relying on one global runtime-owned session.
 - Do not describe automation scripts as plugins.
 - Do not introduce plugin system, marketplace, or plugin architecture terminology.
 - Scheduling belongs to external schedulers or orchestrators.
@@ -75,6 +79,10 @@ If a native WSL virtual environment is created later, use `./venv/bin/python` an
 - Scheduler accounts need access to SAP GUI and target SAP systems.
 - Interactive desktop/session constraints may affect unattended execution.
 - Keep SAP GUI-specific code isolated so non-SAP logic can be tested from WSL.
+- Keep SAP connection resolution APIs in Core/SAP abstractions so Core/CLI can attach to existing connections or open new connections before script execution.
+- Keep SAP session lifecycle APIs connection-scoped so scripts can list sessions, attach to existing sessions, create sessions, and run SAP GUI Scripting code over a selected session.
+- Initial SAP authentication should remain simple: username/password for opening connections, with passwords resolved via `.saphive.auth.toml` references such as `password_env` or `password_prompt`, not raw password CLI arguments.
+- CLI config/auth lookup order is: explicit value flags, explicit config/auth file flags, files beside the runtime-executed script, OS-specific SAPHive CLI config directory, then built-in defaults.
 - Generic unit tests should not require SAP GUI.
 
 ## Coding Standards

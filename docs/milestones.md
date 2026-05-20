@@ -224,45 +224,106 @@ Exit criteria:
 - CLI calls Core for runtime behavior.
 - CLI does not duplicate script discovery, loading, validation, or execution.
 
-## Milestone 11: Logging and Result Files
+## Milestone 11: SAP Connection Resolution
 
-Status: not started
+Status: complete
 
 Checklist:
 
-- [ ] Define standard log fields.
-- [ ] Add console logging.
-- [ ] Add local file logging.
-- [ ] Decide whether JSONL execution records are required initially.
-- [ ] Include log path in execution result.
-- [ ] Add tests for result shape.
+- [x] Add typed SAP connection profile configuration.
+- [x] Add SAP connection mode values: `auto`, `attach`, and `open`.
+- [x] Add CLI overrides for SAP mode and connection profile.
+- [x] Define SAP GUI application/client abstraction.
+- [x] Define SAP connection abstraction.
+- [x] Implement attach to existing SAP GUI connection by configured profile.
+- [x] Implement open SAP Logon connection by configured profile.
+- [x] Implement `auto` mode: attach first, open if not found.
+- [x] Build `SapContext` with a connection-scoped `ctx.sap` before script `run(ctx)`.
+- [x] Ensure script `validate(ctx)` runs before SAP connection resolution.
+- [x] Match existing SAP connections by profile fields where SAP GUI exposes them.
+- [x] Map COM connection failures to SAPHive domain errors.
+- [x] Add fake SAP GUI objects for WSL-safe unit tests.
+
+Exit criteria:
+
+- Core/CLI can select the SAP connection for a script run.
+- `auto`, `attach`, and `open` modes are implemented.
+- Scripts do not open or choose SAP connections directly.
+- SAP is not opened when script validation fails.
+- Windows-specific COM usage remains isolated.
+- Generic tests do not require SAP GUI.
+
+## Milestone 12: SAP Auth File and Session APIs
+
+Status: complete
+
+Checklist:
+
+- [x] Define `.saphive.auth.toml` format.
+- [x] Implement auth file lookup by explicit path, config directory, script directory, then OS-specific SAPHive CLI config directory.
+- [x] Add typed auth profile configuration with `username`, `password_env`, and `password_prompt`.
+- [x] Resolve password from environment variable for unattended usage.
+- [x] Resolve password from prompt for manual usage.
+- [x] Use username/password only when opening a new SAP connection.
+- [x] Require auth only for `open` and `auto` fallback-to-open.
+- [x] Define connection-scoped `ctx.sap` session APIs.
+- [x] Implement `ctx.sap.list_sessions()`.
+- [x] Implement `ctx.sap.attach_session(index=0)`.
+- [x] Implement `ctx.sap.create_session()`.
+- [x] Implement `ctx.sap.active_session()` if reliable.
+- [x] Explicitly avoid password CLI arguments.
+- [x] Document scheduler-safe environment-variable password usage.
+- [x] Add a Windows manual acceptance test command to docs.
+
+Exit criteria:
+
+- Users can configure SAP connection defaults in `saphive.toml`.
+- Users can configure SAP auth references in `.saphive.auth.toml`.
+- Scripts can manage sessions only inside the selected connection.
+- Secrets are not stored in plain runtime config or passed as normal CLI arguments.
+- MVP can run a custom script over a real SAP connection on Windows.
+
+## Milestone 13: Logging and Result Files
+
+Status: complete
+
+Checklist:
+
+- [x] Define standard log fields.
+- [x] Include SAP connection/session metadata where available.
+- [x] Add console logging.
+- [x] Add local file logging.
+- [x] Decide whether JSONL execution records are required initially.
+- [x] Include log path in execution result.
+- [x] Add tests for result shape.
 
 Exit criteria:
 
 - Runs are traceable by run ID.
 - Results are useful for CLI users and schedulers.
+- SAP session usage can be traced when scripts use SAP APIs.
 
-## Milestone 12: Build and Install
+## Milestone 14: Build and Install
 
-Status: not started
+Status: complete
 
 Checklist:
 
-- [ ] Confirm package metadata.
-- [ ] Confirm build backend works.
-- [ ] Build source distribution.
-- [ ] Build wheel distribution.
-- [ ] Install wheel in a clean environment.
-- [ ] Verify `import saphive`.
-- [ ] Verify CLI entry point.
-- [ ] Confirm WSL development is not blocked by Windows-only dependencies.
+- [x] Confirm package metadata.
+- [x] Confirm build backend works.
+- [x] Build source distribution.
+- [x] Build wheel distribution.
+- [x] Install wheel in a clean environment.
+- [x] Verify `import saphive`.
+- [x] Verify CLI entry point.
+- [x] Confirm WSL development is not blocked by Windows-only dependencies.
 
 Exit criteria:
 
 - SAPHive can be distributed internally as one package.
 - Installed package exposes both Core imports and CLI command.
 
-## Milestone 13: First Windows SAP Pilot
+## Milestone 15: First Windows SAP Pilot
 
 Status: not started
 
@@ -273,6 +334,9 @@ Checklist:
 - [ ] Configure script discovery path.
 - [ ] Validate script contract.
 - [ ] Validate script input.
+- [ ] Configure the connection profile and auth file.
+- [ ] Let Core/CLI resolve the SAP connection with `auto`, `attach`, or `open` mode.
+- [ ] In `run(ctx)`, create or attach to a dedicated SAP session through `ctx.sap`.
 - [ ] Run on a Windows machine with SAP GUI installed.
 - [ ] Document SAP session assumptions.
 - [ ] Document gaps found during pilot.
@@ -280,9 +344,11 @@ Checklist:
 Exit criteria:
 
 - One real automation script runs through SAPHive.
+- Core/CLI resolves the SAP connection.
+- The script manages sessions within the selected connection through Core APIs.
 - Core abstractions are adjusted based on real SAP usage, not guesses.
 
-## Milestone 14: Scheduler Examples
+## Milestone 16: Scheduler Examples
 
 Status: not started
 
@@ -293,13 +359,15 @@ Checklist:
 - [ ] Document Airflow usage.
 - [ ] Document exit code behavior.
 - [ ] Document logs and outputs expected by schedulers.
+- [ ] Document scheduler-safe SAP authentication/session configuration.
 
 Exit criteria:
 
 - SAPHive can be called by external schedulers.
 - SAPHive remains outside scheduling ownership.
+- Scheduler examples use safe SAP session/auth configuration.
 
-## Milestone 15: Stabilization
+## Milestone 17: Stabilization
 
 Status: not started
 

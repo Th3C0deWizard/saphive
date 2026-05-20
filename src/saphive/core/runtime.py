@@ -1,16 +1,18 @@
 """Core runtime facade for SAPHive."""
 
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from logging import Logger
 from pathlib import Path
 from uuid import uuid4
 
-from saphive.core.config import SAPHiveConfig
+from saphive.core.config import SapConnectionMode, SAPHiveConfig
 from saphive.core.context import SapContext, build_sap_context
 from saphive.core.errors import SAPHiveError, ScriptExecutionError, ScriptValidationError
 from saphive.core.results import ExecutionStatus, ScriptExecutionResult
-from saphive.sap.interfaces import SapClient
+from saphive.sap.interfaces import SapConnection, SapConnectionResolver
+from saphive.sap.resolver import DefaultSapConnectionResolver, normalize_auth_path
 from saphive.scripts.discovery import discover_scripts
 from saphive.scripts.loader import LoadedScript, load_script_from_path, load_script_from_registry
 from saphive.scripts.registry import ScriptRegistry
@@ -21,9 +23,14 @@ class SapRuntime:
     """Core runtime facade for validating and running SAPHive scripts."""
 
     config: SAPHiveConfig = field(default_factory=SAPHiveConfig)
+    config_path: Path | None = None
+    auth_file: Path | None = None
+    sap_mode: SapConnectionMode | None = None
+    sap_connection: str | None = None
     workdir: Path | None = None
     logger: Logger | None = None
-    sap: SapClient | None = None
+    sap: SapConnection | None = None
+    connection_resolver: SapConnectionResolver = field(default_factory=DefaultSapConnectionResolver)
 
     def discover_scripts(self) -> "ScriptRegistry":
         """Discover configured SAPHive scripts."""
@@ -59,15 +66,83 @@ class SapRuntime:
     ) -> ScriptExecutionResult:
         resolved_run_id = uuid4().hex if run_id is None else run_id
         started_at = datetime.now(UTC)
+        logger, logs_path = _build_run_logger(
+            run_id=resolved_run_id,
+            script=str(script),
+            config=self.config,
+            logger=self.logger,
+        )
+        logger.info("SAPHive run started", extra={"script": str(script), "run_id": resolved_run_id})
 
         try:
             loaded_script = self._load_script(script)
         except SAPHiveError as exc:
+            logger.exception("SAPHive script load failed")
             return _failed_result(
                 script_name=str(script),
                 run_id=resolved_run_id,
                 started_at=started_at,
                 error=exc,
+                logs_path=logs_path,
+            )
+
+        validation_context = build_sap_context(
+            script=loaded_script.metadata,
+            config=self.config,
+            inputs=inputs,
+            run_id=resolved_run_id,
+            workdir=self.workdir,
+            logger=logger,
+        )
+
+        validation_result = _validate_loaded_script(
+            loaded_script,
+            validation_context,
+            started_at,
+            logs_path,
+        )
+        if validation_result is not None:
+            logger.info(
+                "SAPHive validation finished",
+                extra={"status": validation_result.status.value, "run_id": resolved_run_id},
+            )
+            return validation_result
+
+        if not run_script:
+            result = _success_result(validation_context, started_at, logs_path)
+            logger.info("SAPHive validation succeeded", extra={"run_id": resolved_run_id})
+            return result
+
+        if self.sap is not None or _should_resolve_sap(self):
+            try:
+                sap_connection = self.sap or self.connection_resolver.resolve_connection(
+                    config=self.config,
+                    mode=self.sap_mode,
+                    connection_name=self.sap_connection,
+                    auth_file=normalize_auth_path(self.auth_file),
+                    config_path=normalize_auth_path(self.config_path),
+                    script_path=str(loaded_script.source_path),
+                )
+            except SAPHiveError as exc:
+                logger.exception("SAPHive SAP connection resolution failed")
+                return _failed_result(
+                    script_name=validation_context.script.name,
+                    run_id=validation_context.run_id,
+                    started_at=started_at,
+                    error=exc,
+                    outputs=validation_context.outputs,
+                    logs_path=logs_path,
+                )
+        else:
+            sap_connection = None
+
+        if sap_connection is not None:
+            logger.info(
+                "SAPHive SAP connection resolved",
+                extra={
+                    "run_id": resolved_run_id,
+                    "sap_connection": sap_connection.connection_name,
+                },
             )
 
         context = build_sap_context(
@@ -76,19 +151,18 @@ class SapRuntime:
             inputs=inputs,
             run_id=resolved_run_id,
             workdir=self.workdir,
-            logger=self.logger,
-            sap=self.sap,
+            logger=logger,
+            sap=sap_connection,
         )
+        context.outputs.update(validation_context.outputs)
 
-        validation_result = _validate_loaded_script(loaded_script, context, started_at)
-        if validation_result is not None:
-            return validation_result
-
-        if not run_script:
-            return _success_result(context, started_at)
-
-        execution_result = _run_loaded_script(loaded_script, context, started_at)
-        return execution_result or _success_result(context, started_at)
+        execution_result = _run_loaded_script(loaded_script, context, started_at, logs_path)
+        result = execution_result or _success_result(context, started_at, logs_path)
+        logger.info(
+            "SAPHive run finished",
+            extra={"status": result.status.value, "run_id": resolved_run_id},
+        )
+        return result
 
     def _load_script(self, script: str | Path) -> "LoadedScript":
         if isinstance(script, Path):
@@ -105,15 +179,24 @@ def _looks_like_path(script: str) -> bool:
     return script.endswith(".py") or "/" in script or "\\" in script
 
 
+def _should_resolve_sap(runtime: SapRuntime) -> bool:
+    return (
+        runtime.sap_mode is not None
+        or runtime.sap_connection is not None
+        or runtime.config.sap.connection is not None
+    )
+
+
 def _validate_loaded_script(
     loaded_script: LoadedScript,
     context: SapContext,
     started_at: datetime,
+    logs_path: Path | None,
 ) -> ScriptExecutionResult | None:
     try:
         loaded_script.validate(context)
     except ScriptValidationError as exc:
-        return _validation_failed_result(context, started_at, exc)
+        return _validation_failed_result(context, started_at, exc, logs_path)
     except SAPHiveError as exc:
         return _failed_result(
             script_name=context.script.name,
@@ -121,6 +204,7 @@ def _validate_loaded_script(
             started_at=started_at,
             error=exc,
             outputs=context.outputs,
+            logs_path=logs_path,
         )
     except Exception as exc:
         return _failed_result(
@@ -129,6 +213,7 @@ def _validate_loaded_script(
             started_at=started_at,
             error=ScriptValidationError(str(exc)),
             outputs=context.outputs,
+            logs_path=logs_path,
         )
 
     return None
@@ -138,6 +223,7 @@ def _run_loaded_script(
     loaded_script: LoadedScript,
     context: SapContext,
     started_at: datetime,
+    logs_path: Path | None,
 ) -> ScriptExecutionResult | None:
     try:
         loaded_script.run(context)
@@ -148,6 +234,7 @@ def _run_loaded_script(
             started_at=started_at,
             error=exc,
             outputs=context.outputs,
+            logs_path=logs_path,
         )
     except SAPHiveError as exc:
         return _failed_result(
@@ -156,6 +243,7 @@ def _run_loaded_script(
             started_at=started_at,
             error=exc,
             outputs=context.outputs,
+            logs_path=logs_path,
         )
     except Exception as exc:
         return _failed_result(
@@ -164,18 +252,24 @@ def _run_loaded_script(
             started_at=started_at,
             error=ScriptExecutionError(str(exc)),
             outputs=context.outputs,
+            logs_path=logs_path,
         )
 
     return None
 
 
-def _success_result(context: SapContext, started_at: datetime) -> ScriptExecutionResult:
+def _success_result(
+    context: SapContext,
+    started_at: datetime,
+    logs_path: Path | None,
+) -> ScriptExecutionResult:
     return ScriptExecutionResult(
         script_name=context.script.name,
         run_id=context.run_id,
         status=ExecutionStatus.SUCCESS,
         started_at=started_at,
         finished_at=datetime.now(UTC),
+        logs_path=logs_path,
         outputs=dict(context.outputs),
     )
 
@@ -184,6 +278,7 @@ def _validation_failed_result(
     context: SapContext,
     started_at: datetime,
     error: ScriptValidationError,
+    logs_path: Path | None,
 ) -> ScriptExecutionResult:
     return ScriptExecutionResult(
         script_name=context.script.name,
@@ -191,6 +286,7 @@ def _validation_failed_result(
         status=ExecutionStatus.VALIDATION_FAILED,
         started_at=started_at,
         finished_at=datetime.now(UTC),
+        logs_path=logs_path,
         outputs=dict(context.outputs),
         error=error.message,
     )
@@ -203,6 +299,7 @@ def _failed_result(
     started_at: datetime,
     error: SAPHiveError,
     outputs: dict[str, object] | None = None,
+    logs_path: Path | None = None,
 ) -> ScriptExecutionResult:
     return ScriptExecutionResult(
         script_name=script_name,
@@ -210,6 +307,34 @@ def _failed_result(
         status=ExecutionStatus.FAILED,
         started_at=started_at,
         finished_at=datetime.now(UTC),
+        logs_path=logs_path,
         outputs=dict(outputs or {}),
         error=error.message,
     )
+
+
+def _build_run_logger(
+    *,
+    run_id: str,
+    script: str,
+    config: SAPHiveConfig,
+    logger: Logger | None,
+) -> tuple[Logger, Path | None]:
+    if logger is not None:
+        return logger, None
+
+    logs_dir = config.logging.directory
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    logs_path = logs_dir / f"{run_id}.log"
+    run_logger = logging.getLogger(f"saphive.run.{run_id}")
+    run_logger.setLevel(config.logging.level)
+    run_logger.propagate = False
+    run_logger.handlers.clear()
+
+    handler = logging.FileHandler(logs_path, encoding="utf-8")
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    )
+    run_logger.addHandler(handler)
+    run_logger.info("Logger initialized", extra={"script": script, "run_id": run_id})
+    return run_logger, logs_path

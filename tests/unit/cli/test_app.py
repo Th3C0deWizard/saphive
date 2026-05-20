@@ -2,9 +2,11 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from saphive.cli.app import VALIDATION_FAILED_EXIT_CODE, app
+from saphive.cli.app import VALIDATION_FAILED_EXIT_CODE, _load_cli_config, app
 
 runner = CliRunner()
+EXPLICIT_TIMEOUT_SECONDS = 240
+OS_CONFIG_TIMEOUT_SECONDS = 180
 
 
 def test_cli_scripts_list_shows_discovered_scripts(tmp_path: Path) -> None:
@@ -94,6 +96,64 @@ def test_cli_root_run_accepts_explicit_script_path(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert "script: path_script" in result.output
     assert "output.ran_from_path: True" in result.output
+
+
+def test_cli_root_run_loads_config_from_script_directory(tmp_path: Path) -> None:
+    script_dir = tmp_path / "script-dir"
+    script_dir.mkdir()
+    script_path = script_dir / "path_script.py"
+    _write_script(
+        script_path,
+        "path_script",
+        run_body='ctx.set_output("timeout", ctx.config.runtime.default_timeout_seconds)',
+    )
+    (script_dir / "saphive.toml").write_text(
+        """
+[runtime]
+default_timeout_seconds = 120
+""".strip(),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["run", str(script_path)])
+
+    assert result.exit_code == 0
+    assert "output.timeout: 120" in result.output
+
+
+def test_cli_config_file_flag_overrides_script_directory_config(tmp_path: Path) -> None:
+    script_dir = tmp_path / "script-dir"
+    explicit_dir = tmp_path / "explicit"
+    script_dir.mkdir()
+    explicit_dir.mkdir()
+    script_path = script_dir / "job.py"
+    script_config = script_dir / "saphive.toml"
+    explicit_config = explicit_dir / "custom.toml"
+    script_config.write_text("[runtime]\ndefault_timeout_seconds = 120", encoding="utf-8")
+    explicit_config.write_text(
+        f"[runtime]\ndefault_timeout_seconds = {EXPLICIT_TIMEOUT_SECONDS}",
+        encoding="utf-8",
+    )
+
+    config, resolved_path = _load_cli_config(explicit_config, script_path=script_path)
+
+    assert resolved_path == explicit_config
+    assert config.runtime.default_timeout_seconds == EXPLICIT_TIMEOUT_SECONDS
+
+
+def test_cli_loads_config_from_os_config_directory(tmp_path: Path) -> None:
+    config_dir = tmp_path / "cli-config"
+    config_dir.mkdir()
+    config_path = config_dir / "saphive.toml"
+    config_path.write_text(
+        f"[runtime]\ndefault_timeout_seconds = {OS_CONFIG_TIMEOUT_SECONDS}",
+        encoding="utf-8",
+    )
+
+    config, resolved_path = _load_cli_config(None, config_dir=config_dir)
+
+    assert resolved_path == config_path
+    assert config.runtime.default_timeout_seconds == OS_CONFIG_TIMEOUT_SECONDS
 
 
 def test_cli_returns_validation_exit_code_for_validation_failure(tmp_path: Path) -> None:

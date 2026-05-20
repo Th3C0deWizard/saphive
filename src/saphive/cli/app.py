@@ -8,10 +8,11 @@ import typer
 from saphive.core import (
     ConfigurationError,
     ExecutionStatus,
+    SapConnectionMode,
     SAPHiveConfig,
     SAPHiveError,
     SapRuntime,
-    find_default_config,
+    find_cli_config,
     load_config,
 )
 from saphive.core.results import ScriptExecutionResult
@@ -42,6 +43,24 @@ InputOption = Annotated[
         "--input",
         "-i",
         help="Runtime input as KEY=VALUE. Can be provided multiple times.",
+    ),
+]
+SapModeOption = Annotated[
+    SapConnectionMode | None,
+    typer.Option("--sap-mode", help="SAP connection mode override: auto, attach, or open."),
+]
+SapConnectionOption = Annotated[
+    str | None,
+    typer.Option("--sap-connection", help="SAP connection profile name override."),
+]
+SapAuthFileOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--sap-auth-file",
+        help="Path to .saphive.auth.toml for opening SAP connections.",
+        exists=True,
+        dir_okay=False,
+        readable=True,
     ),
 ]
 
@@ -91,9 +110,12 @@ def validate_named_script(
     script_name: str,
     config: ConfigOption = None,
     inputs: InputOption = None,
+    sap_mode: SapModeOption = None,
+    sap_connection: SapConnectionOption = None,
+    sap_auth_file: SapAuthFileOption = None,
 ) -> None:
     """Validate a discovered SAPHive script."""
-    runtime = _build_runtime(config)
+    runtime = _build_runtime(config, sap_mode, sap_connection, sap_auth_file)
     result = runtime.validate_script(script_name, inputs=_parse_inputs(inputs))
     _print_result(result)
     raise typer.Exit(_exit_code_for_result(result))
@@ -104,9 +126,12 @@ def run_named_script(
     script_name: str,
     config: ConfigOption = None,
     inputs: InputOption = None,
+    sap_mode: SapModeOption = None,
+    sap_connection: SapConnectionOption = None,
+    sap_auth_file: SapAuthFileOption = None,
 ) -> None:
     """Run a discovered SAPHive script."""
-    runtime = _build_runtime(config)
+    runtime = _build_runtime(config, sap_mode, sap_connection, sap_auth_file)
     result = runtime.run_script(script_name, inputs=_parse_inputs(inputs))
     _print_result(result)
     raise typer.Exit(_exit_code_for_result(result))
@@ -117,9 +142,12 @@ def run_script_path(
     script_path: Path,
     config: ConfigOption = None,
     inputs: InputOption = None,
+    sap_mode: SapModeOption = None,
+    sap_connection: SapConnectionOption = None,
+    sap_auth_file: SapAuthFileOption = None,
 ) -> None:
     """Run a SAPHive script from an explicit file or package path."""
-    runtime = _build_runtime(config)
+    runtime = _build_runtime(config, sap_mode, sap_connection, sap_auth_file, script_path)
     result = runtime.run_script(script_path, inputs=_parse_inputs(inputs))
     _print_result(result)
     raise typer.Exit(_exit_code_for_result(result))
@@ -130,24 +158,41 @@ def main() -> None:
     app()
 
 
-def _build_runtime(config_path: Path | None) -> SapRuntime:
+def _build_runtime(
+    config_path: Path | None,
+    sap_mode: SapConnectionMode | None = None,
+    sap_connection: str | None = None,
+    sap_auth_file: Path | None = None,
+    script_path: Path | None = None,
+) -> SapRuntime:
     try:
-        config = _load_cli_config(config_path)
+        config, resolved_config_path = _load_cli_config(config_path, script_path=script_path)
     except ConfigurationError as exc:
         _exit_with_error(exc)
 
-    return SapRuntime(config=config)
+    return SapRuntime(
+        config=config,
+        config_path=resolved_config_path,
+        auth_file=sap_auth_file,
+        sap_mode=sap_mode,
+        sap_connection=sap_connection,
+    )
 
 
-def _load_cli_config(config_path: Path | None) -> SAPHiveConfig:
+def _load_cli_config(
+    config_path: Path | None,
+    *,
+    script_path: Path | None = None,
+    config_dir: Path | None = None,
+) -> tuple[SAPHiveConfig, Path | None]:
     if config_path is not None:
-        return load_config(config_path)
+        return load_config(config_path), config_path
 
-    default_config_path = find_default_config()
+    default_config_path = find_cli_config(script_path=script_path, config_dir=config_dir)
     if default_config_path is None:
-        return SAPHiveConfig()
+        return SAPHiveConfig(), None
 
-    return load_config(default_config_path)
+    return load_config(default_config_path), default_config_path
 
 
 def _parse_inputs(raw_inputs: list[str] | None) -> dict[str, object]:
@@ -171,6 +216,8 @@ def _print_result(result: ScriptExecutionResult) -> None:
     if result.outputs:
         for key, value in sorted(result.outputs.items()):
             typer.echo(f"output.{key}: {value}")
+    if result.logs_path is not None:
+        typer.echo(f"logs: {result.logs_path}")
 
 
 def _exit_code_for_result(result: ScriptExecutionResult) -> int:

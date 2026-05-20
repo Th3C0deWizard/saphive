@@ -1,8 +1,23 @@
-# SAPHive Architecture Plan
+# SAPHive Architecture
 
 SAPHive is a lightweight internal RPA runtime and SDK specialized in SAP GUI Scripting automation. Its purpose is to replace scattered Excel VBA macros with a maintainable, typed, Python-based architecture for discovering, validating, and executing SAP automation scripts.
 
-This document defines the initial planning architecture. It intentionally avoids implementation details that should be decided later during proof-of-concept work.
+This document defines the current pre-alpha architecture and the boundaries that should remain stable as SAPHive moves toward internal publication.
+
+## Current Implementation
+
+The current implementation provides SAPHive Core, a thin Typer CLI, script discovery/loading/validation/execution, local file logging, SAP connection resolution, SAP auth-file handling, and Windows SAP GUI Scripting integration behind isolated interfaces.
+
+Implemented runtime behavior:
+
+- `saphive scripts list`, `inspect`, `validate`, and `run` call Core APIs.
+- `saphive run <path>` runs a script file or package by explicit path.
+- `validate(ctx)` runs before SAP connection resolution.
+- `run(ctx)` receives connection-scoped `ctx.sap` after Core resolves the SAP connection.
+- SAP connection modes are `auto`, `attach`, and `open`.
+- `auto` attaches first, then opens the configured SAP Logon connection when attach is not available.
+- Auth uses `.saphive.auth.toml` with `password_env` or `password_prompt`.
+- Local auth files, logs, caches, and build artifacts are excluded from version control and source distributions.
 
 ## Project Goals
 
@@ -73,10 +88,10 @@ SAPHive Core is the center of the architecture. CLI, schedulers, future APIs, an
 | Scheduler / Orchestrator | Owns timing, retries, monitoring, dependencies, and scheduled execution. |
 | Future API / Web UI / Workers | Additional frontends over Core, not separate runtimes. |
 
-## Proposed Source Layout
+## Source Layout
 
 ```text
-saphive/
+src/saphive/
   core/
     context.py
     runtime.py
@@ -106,20 +121,9 @@ saphive/
     commands.py
     formatters.py
 
-  utils/
-    paths.py
-    imports.py
-    typing.py
-```
-
-The initial implementation should prefer a `src/` layout once code is added:
-
-```text
-src/
-  saphive/
-    ...
 tests/
 docs/
+examples/
 ```
 
 ## SAPHive Core
@@ -171,9 +175,9 @@ Suggested commands:
 
 ```text
 saphive scripts list
-saphive scripts inspect create_notifications
-saphive scripts validate create_notifications --input input.xlsx
-saphive scripts run create_notifications --input input.xlsx
+saphive scripts inspect create_sessions
+saphive scripts validate create_sessions --config examples/scripts/saphive.toml
+saphive scripts run create_sessions --config examples/scripts/saphive.toml
 saphive run path/to/script.py --input input.xlsx
 ```
 
@@ -259,7 +263,7 @@ It should provide access to:
 - Script metadata.
 - Input parameters.
 - Logger.
-- SAP session abstraction.
+- SAP client/session management APIs.
 - Execution identifiers.
 - Working directories.
 - Validation helpers.
@@ -279,17 +283,20 @@ SapContext
   output
 ```
 
-Scripts should interact with SAP through `ctx.sap` rather than creating their own raw SAP GUI session objects unless there is a clear escape-hatch requirement.
+Core and the CLI own SAP connection selection. A run chooses one SAP connection using configuration plus CLI overrides before the script executes. The selected connection is then exposed to the script as `ctx.sap`.
+
+Scripts should manage sessions only within that selected connection. For each independent automation bot, the recommended pattern is to create or attach to a dedicated SAP session inside the script, execute SAP GUI Scripting work over that session, and close or release it when appropriate.
 
 ## SAP GUI Abstraction
 
-Core should wrap SAP GUI Scripting enough to make scripts consistent and safer.
+Core should wrap SAP GUI Scripting enough to make scripts consistent and safer. Core/CLI should resolve the connection, and user-written SAPHive scripts should manage sessions explicitly within that resolved connection.
 
 Potential abstractions:
 
 ```text
-SapSessionManager
+SapConnectionResolver
 SapGuiClient
+SapConnection
 SapSession
 SapElement
 SapTransaction
@@ -298,8 +305,14 @@ SapWaiter
 
 Responsibilities:
 
-- Connect to an active SAP GUI instance.
-- Select a system, client, and session.
+- Initialize access to SAP GUI Scripting.
+- Attach to an existing SAP GUI application.
+- Resolve the run connection using `auto`, `attach`, or `open` mode.
+- Open a SAP Logon connection by configured connection profile.
+- Attach to an existing connection by configured connection profile.
+- Create a new session from an existing connection.
+- Attach to an existing session within the selected connection.
+- Select a system, client, and connection before script execution.
 - Start transactions.
 - Find controls.
 - Set field values.
@@ -310,6 +323,236 @@ Responsibilities:
 - Normalize common SAP GUI Scripting errors.
 
 The first implementation should not try to fully model SAP GUI. It should provide practical helpers around the real SAP GUI Scripting API.
+
+Recommended script pattern:
+
+```python
+from saphive import SapContext
+
+SCRIPT_NAME = "create_notifications"
+DESCRIPTION = "Create SAP maintenance notifications."
+
+def validate(ctx: SapContext) -> None:
+    ...
+
+def run(ctx: SapContext) -> None:
+    session = ctx.sap.create_session()
+
+    session.start_transaction("IW21")
+    session.set_text("wnd[0]/usr/ctxtQMART", "M1")
+    session.press("wnd[0]/tbar[0]/btn[11]")
+```
+
+Alternative attach pattern:
+
+```python
+def run(ctx: SapContext) -> None:
+    session = ctx.sap.attach_session(index=0)
+    session.start_transaction("IW22")
+```
+
+Core should support these flows without forcing one global runtime-owned SAP session. The connection is runtime-owned; sessions are script-managed.
+
+## SAP Connection Resolution
+
+SAPHive should keep connection selection simple. The runtime should support three connection modes:
+
+| Mode | Behavior |
+| --- | --- |
+| `auto` | Try to attach to an existing matching SAP connection. If none exists, open a new connection using configured auth. |
+| `attach` | Attach only. Fail if no matching SAP connection exists. |
+| `open` | Always open a new SAP Logon connection using configured auth. |
+
+Default mode should be `auto`.
+
+The connection profile should live in `saphive.toml` because it is runtime configuration, not script code:
+
+```toml
+[sap]
+mode = "auto"
+connection = "prd"
+
+[sap.connections.prd]
+sap_logon_name = "PRD"
+client = "100"
+language = "EN"
+```
+
+CLI flags should override config for operational flexibility:
+
+```bash
+saphive scripts run create_notifications \
+  --config saphive.toml \
+  --sap-mode auto \
+  --sap-connection prd
+```
+
+The runtime should resolve the connection before script `run(ctx)` executes. After resolution, `ctx.sap` should be a connection-scoped object that exposes session APIs only:
+
+```text
+ctx.sap.connection_name
+ctx.sap.list_sessions()
+ctx.sap.attach_session(index=0)
+ctx.sap.create_session()
+ctx.sap.active_session()
+```
+
+MVP connection resolution timing:
+
+```text
+1. Load runtime configuration.
+2. Load and validate the SAPHive script contract.
+3. Build a validation context without opening SAP.
+4. Run script validate(ctx).
+5. If validation succeeds, resolve SAP connection using auto, attach, or open mode.
+6. Build or update runtime context with connection-scoped ctx.sap.
+7. Run script run(ctx).
+8. Return structured execution result and logs.
+```
+
+This avoids opening SAP GUI when script input validation fails.
+
+Exact mode behavior:
+
+```text
+auto:
+  try attach existing matching connection
+  if not found, open new connection using auth
+
+attach:
+  attach existing matching connection
+  fail if not found
+
+open:
+  always open new connection using auth
+```
+
+The connection profile matching rules should be simple for the MVP:
+
+- Match by configured SAP Logon entry name when possible.
+- Match by client when available.
+- Match by system name/description when available from SAP GUI Scripting.
+- If multiple matches exist, use the first match and log enough metadata to diagnose ambiguity.
+
+## SAP Authentication and Secrets
+
+For the initial implementation, authentication should be username/password only for opening a connection. `attach` mode should not need credentials because it attaches to an already authenticated SAP GUI connection.
+
+SAPHive should not store raw SAP passwords in `saphive.toml` or require passwords through normal CLI flags. Connection details stay in `saphive.toml`; credentials live in a separate auth file or are resolved through environment variables/prompt.
+
+Recommended auth file name:
+
+```text
+.saphive.auth.toml
+```
+
+Auth file lookup order:
+
+1. Explicit path from `--sap-auth-file`.
+2. Same directory as the active `saphive.toml`.
+3. Same directory as the runtime-executed script.
+4. OS-specific SAPHive CLI config directory.
+
+CLI configuration lookup order:
+
+1. Explicit path from `--config`.
+2. Same directory as the runtime-executed script, for explicit script-path runs.
+3. OS-specific SAPHive CLI config directory.
+4. Built-in default config values.
+
+Example configuration:
+
+```toml
+[sap]
+mode = "auto"
+connection = "prd"
+
+[sap.connections.prd]
+sap_logon_name = "PRD"
+client = "100"
+language = "EN"
+```
+
+Example `.saphive.auth.toml`:
+
+```toml
+[connections.prd]
+username = "MY_SAP_USER"
+password_env = "SAPHIVE_PRD_PASSWORD"
+```
+
+Example CLI override:
+
+```bash
+saphive scripts run create_notifications \
+  --config saphive.toml \
+  --sap-mode auto \
+  --sap-connection prd \
+  --sap-auth-file .saphive.auth.toml
+```
+
+Avoid this pattern:
+
+```bash
+saphive scripts run create_notifications --sap-password secret
+```
+
+Passwords passed as CLI arguments can leak through shell history, process lists, logs, and scheduler definitions.
+
+For manual local usage, SAPHive may support `password_prompt = true` in the auth file. For unattended scheduler usage, prefer `password_env` initially.
+
+MVP auth rules:
+
+- `attach` mode must not require auth details.
+- `open` mode requires `username` and either `password_env` or `password_prompt`.
+- `auto` mode requires auth details only when attach fails and Core must open a new connection.
+- Raw password values must not be accepted in `saphive.toml`.
+- Raw password CLI flags must not be implemented.
+- Missing auth for a required open must fail with a clear `SapConnectionError`.
+
+## MVP SAP Runtime Acceptance Criteria
+
+The MVP is complete when a Windows machine with SAP GUI installed can run a custom SAPHive script over a real SAP connection.
+
+Required manual command:
+
+```bash
+saphive scripts run create_notifications \
+  --config saphive.toml \
+  --sap-mode auto \
+  --sap-connection prd \
+  --sap-auth-file .saphive.auth.toml
+```
+
+Required script behavior:
+
+```python
+from saphive import SapContext
+
+SCRIPT_NAME = "create_notifications"
+DESCRIPTION = "Create SAP maintenance notifications."
+
+def validate(ctx: SapContext) -> None:
+    ...
+
+def run(ctx: SapContext) -> None:
+    session = ctx.sap.create_session()
+    session.start_transaction("IW21")
+    ctx.set_output("status", session.status_bar_text())
+```
+
+The MVP must prove these capabilities:
+
+- `auto` attaches to an existing matching SAP connection when available.
+- `auto` opens a new SAP connection when no match exists and auth is available.
+- `attach` fails clearly when no matching SAP connection exists.
+- `open` opens a new SAP connection using username/password auth.
+- Script `validate(ctx)` can run without opening SAP.
+- Script `run(ctx)` receives a connection-scoped `ctx.sap`.
+- Script can list, attach, or create sessions within the selected connection.
+- Script can execute SAP GUI Scripting operations over a session.
+- Failures are normalized into SAPHive domain errors and structured results.
+- Generic WSL unit tests still do not require SAP GUI.
 
 ## Script Discovery
 
@@ -329,7 +572,11 @@ default_timeout_seconds = 300
 log_level = "INFO"
 
 [sap]
-connection_name = "PRD"
+mode = "auto"
+connection = "prd"
+
+[sap.connections.prd]
+sap_logon_name = "PRD"
 client = "100"
 language = "EN"
 ```

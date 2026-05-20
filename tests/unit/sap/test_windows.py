@@ -1,10 +1,13 @@
 import sys
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from saphive import SapConnectionError, SapGuiError
+from saphive import SapConnectionError, SapConnectionProfile, SapGuiError
 from saphive.sap import WindowsSapGuiClient, WindowsSapSession
+from saphive.sap.windows import _load_dispatch_factory
 
 
 def test_windows_client_does_not_require_pywin32_until_connect() -> None:
@@ -17,32 +20,130 @@ def test_windows_client_guards_non_windows_platform(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(sys, "platform", "linux")
 
     with pytest.raises(SapConnectionError, match="requires Windows"):
-        WindowsSapGuiClient().connect()
+        WindowsSapGuiClient().attach_connection("PRD", SapConnectionProfile(sap_logon_name="PRD"))
 
 
 def test_windows_client_wraps_dispatch_failures() -> None:
     def failing_dispatch(name: str) -> object:
         raise RuntimeError(f"{name} unavailable")
 
-    with pytest.raises(SapConnectionError, match="could not connect") as exc_info:
-        WindowsSapGuiClient(dispatch_factory=failing_dispatch).connect()
+    with pytest.raises(SapConnectionError, match="could not access") as exc_info:
+        WindowsSapGuiClient(dispatch_factory=failing_dispatch).attach_connection(
+            "PRD",
+            SapConnectionProfile(sap_logon_name="PRD"),
+        )
 
     assert exc_info.value.details["error"] == "SAPGUI unavailable"
 
 
+def test_windows_dispatch_factory_uses_sapgui_running_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def get_object(name: str) -> object:
+        calls.append(name)
+        return object()
+
+    def fake_import_module(name: str) -> object:
+        assert name == "win32com.client"
+        return SimpleNamespace(GetObject=get_object)
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr("saphive.sap.windows.import_module", fake_import_module)
+
+    factory = _load_dispatch_factory()
+
+    assert factory("SAPGUI") is not None
+    assert calls == ["SAPGUI"]
+
+
+def test_windows_dispatch_factory_falls_back_to_scripting_control(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    scripting_control = object()
+
+    def get_object(name: str) -> object:
+        calls.append(f"get:{name}")
+        raise RuntimeError("SAPGUI running object unavailable")
+
+    def dispatch(name: str) -> object:
+        calls.append(f"dispatch:{name}")
+        return scripting_control
+
+    def fake_import_module(name: str) -> object:
+        assert name == "win32com.client"
+        return SimpleNamespace(GetObject=get_object, Dispatch=dispatch)
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr("saphive.sap.windows.import_module", fake_import_module)
+
+    factory = _load_dispatch_factory()
+
+    assert factory("SAPGUI") is scripting_control
+    assert calls == ["get:SAPGUI", "dispatch:Sapgui.ScriptingCtrl.1"]
+
+
+def test_windows_dispatch_factory_starts_sap_logon_before_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    sap_gui = object()
+    sap_logon_path = tmp_path / "saplogon.exe"
+    sap_logon_path.write_text("", encoding="utf-8")
+
+    def get_object(name: str) -> object:
+        calls.append(f"get:{name}")
+        if calls.count(f"get:{name}") == 1:
+            raise RuntimeError("SAPGUI running object unavailable")
+
+        return sap_gui
+
+    def dispatch(name: str) -> object:
+        calls.append(f"dispatch:{name}")
+        raise RuntimeError("scripting control unavailable")
+
+    def fake_import_module(name: str) -> object:
+        assert name == "win32com.client"
+        return SimpleNamespace(GetObject=get_object, Dispatch=dispatch)
+
+    popen_calls: list[list[str]] = []
+
+    def fake_popen(args: list[str], **kwargs: object) -> object:
+        popen_calls.append(args)
+        return object()
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr("saphive.sap.windows.import_module", fake_import_module)
+    monkeypatch.setattr("saphive.sap.windows.subprocess.Popen", fake_popen)
+
+    factory = _load_dispatch_factory(
+        start_sap_logon=True,
+        sap_logon_paths=(sap_logon_path,),
+        sleep=lambda _: None,
+    )
+
+    assert factory("SAPGUI") is sap_gui
+    assert popen_calls == [[str(sap_logon_path)]]
+    assert calls == ["get:SAPGUI", "get:SAPGUI"]
+
+
 def test_windows_client_selects_connection_and_session() -> None:
     session = FakeComSession()
-    connection = FakeConnection(description="PRD", sessions=[session])
-    application = FakeApplication(connections=[connection])
+    com_connection = FakeConnection(description="PRD", sessions=[session])
+    application = FakeApplication(connections=[com_connection])
 
     def dispatch(name: str) -> FakeSapGui:
         assert name == "SAPGUI"
         return FakeSapGui(application=application)
 
-    wrapped_session = WindowsSapGuiClient(
-        connection_name="PRD",
-        dispatch_factory=dispatch,
-    ).connect()
+    sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).attach_connection(
+        "prd",
+        SapConnectionProfile(sap_logon_name="PRD"),
+    )
+    wrapped_session = sap_connection.attach_session()
 
     assert isinstance(wrapped_session, WindowsSapSession)
     wrapped_session.start_transaction("IW21")
@@ -61,9 +162,12 @@ def test_windows_client_raises_when_connection_name_is_missing() -> None:
         return FakeSapGui(application=application)
 
     with pytest.raises(SapConnectionError, match="not found") as exc_info:
-        WindowsSapGuiClient(connection_name="PRD", dispatch_factory=dispatch).connect()
+        WindowsSapGuiClient(dispatch_factory=dispatch).attach_connection(
+            "prd",
+            SapConnectionProfile(sap_logon_name="PRD"),
+        )
 
-    assert exc_info.value.details == {"connection_name": "PRD"}
+    assert exc_info.value.details == {"sap_logon_name": "PRD", "client": None}
 
 
 def test_windows_session_wraps_gui_operation_failures() -> None:

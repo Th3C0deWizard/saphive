@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from saphive.core.config import SAPHiveConfig
 from saphive.core.metadata import ScriptMetadata
-from saphive.sap.interfaces import SapClient, SapGuiPlaceholder
+from saphive.sap.interfaces import SapConnection, SapGuiPlaceholder
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,7 +29,7 @@ class SapContext:
     paths: RuntimePaths
     config: SAPHiveConfig
     logger: Logger
-    sap: SapClient
+    sap: SapConnection
     inputs: dict[str, object] = field(default_factory=dict)
     outputs: dict[str, object] = field(default_factory=dict)
 
@@ -46,7 +46,7 @@ def build_sap_context(
     run_id: str | None = None,
     workdir: str | Path | None = None,
     logger: Logger | None = None,
-    sap: SapClient | None = None,
+    sap: SapConnection | None = None,
 ) -> SapContext:
     """Build a consistent runtime context for validation or execution paths."""
     resolved_config = SAPHiveConfig() if config is None else config

@@ -1,16 +1,27 @@
 """Configuration models and loading helpers for SAPHive Core."""
 
 import tomllib
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from platformdirs import user_config_path
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from saphive.core.errors import ConfigurationError
 
 DEFAULT_CONFIG_FILENAMES = ("saphive.toml",)
+DEFAULT_APP_NAME = "saphive"
 LOG_LEVELS = frozenset({"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"})
 SAP_LANGUAGE_CODE_LENGTH = 2
+
+
+class SapConnectionMode(StrEnum):
+    """SAP connection resolution modes for a script run."""
+
+    AUTO = "auto"
+    ATTACH = "attach"
+    OPEN = "open"
 
 
 class PathsConfig(BaseModel):
@@ -50,12 +61,12 @@ class LoggingConfig(BaseModel):
         return normalized
 
 
-class SapConfig(BaseModel):
-    """SAP GUI connection preferences without storing secrets."""
+class SapConnectionProfile(BaseModel):
+    """Non-secret SAP connection profile."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    connection_name: str | None = None
+    sap_logon_name: str
     client: str | None = None
     language: str = "EN"
 
@@ -63,11 +74,25 @@ class SapConfig(BaseModel):
     @classmethod
     def normalize_language(cls, language: str) -> str:
         """Normalize SAP language codes to uppercase."""
-        normalized = language.upper()
-        if len(normalized) != SAP_LANGUAGE_CODE_LENGTH:
-            raise ValueError("SAP language must be a two-letter code.")
+        return _normalize_sap_language(language)
 
-        return normalized
+
+class SapConfig(BaseModel):
+    """SAP GUI connection preferences without storing secrets."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    mode: SapConnectionMode = SapConnectionMode.AUTO
+    connection: str | None = None
+    connections: dict[str, SapConnectionProfile] = Field(default_factory=dict)
+
+
+def _normalize_sap_language(language: str) -> str:
+    normalized = language.upper()
+    if len(normalized) != SAP_LANGUAGE_CODE_LENGTH:
+        raise ValueError("SAP language must be a two-letter code.")
+
+    return normalized
 
 
 class SAPHiveConfig(BaseModel):
@@ -123,6 +148,31 @@ def find_default_config(start: str | Path | None = None) -> Path | None:
     return None
 
 
+def default_cli_config_dir() -> Path:
+    """Return the OS-specific user config directory for SAPHive CLI files."""
+    return user_config_path(DEFAULT_APP_NAME, appauthor=False)
+
+
+def find_cli_config(
+    *,
+    script_path: str | Path | None = None,
+    config_dir: str | Path | None = None,
+) -> Path | None:
+    """Find CLI config using script-local, OS config directory, then code defaults."""
+    if script_path is not None:
+        script_dir = _script_directory(Path(script_path))
+        candidate = script_dir / DEFAULT_CONFIG_FILENAMES[0]
+        if candidate.is_file():
+            return candidate
+
+    cli_config_dir = default_cli_config_dir() if config_dir is None else Path(config_dir)
+    candidate = cli_config_dir / DEFAULT_CONFIG_FILENAMES[0]
+    if candidate.is_file():
+        return candidate
+
+    return None
+
+
 def load_default_config(start: str | Path | None = None) -> SAPHiveConfig:
     """Load the nearest default SAPHive configuration file."""
     config_path = find_default_config(start)
@@ -164,3 +214,7 @@ def _resolve_path(path: Path, base_dir: Path) -> Path:
         return path.resolve()
 
     return (base_dir / path).resolve()
+
+
+def _script_directory(script_path: Path) -> Path:
+    return script_path if script_path.is_dir() else script_path.parent

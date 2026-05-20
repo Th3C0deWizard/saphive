@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "saphive"
 version = "0.1.0"
 description = "Lightweight Python runtime and SDK for SAP GUI Scripting automation."
-readme = "docs/architecture.md"
+readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
 authors = [
@@ -41,6 +41,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "build>=1.2,<2",
   "mypy>=1.10,<2",
   "pytest>=8.2,<9",
   "pytest-cov>=5,<8",
@@ -66,10 +67,20 @@ packages = ["src/saphive"]
 [tool.hatch.build.targets.sdist]
 include = [
   "docs",
+  "examples",
+  "README.md",
   "src",
   "tests",
   "pyproject.toml",
   "AGENTS.md"
+]
+exclude = [
+  "**/.saphive.auth.toml",
+  "**/.saphive.auth.local.toml",
+  "**/__pycache__",
+  "**/*.pyc",
+  "**/logs",
+  "**/*.log"
 ]
 
 [tool.ruff]

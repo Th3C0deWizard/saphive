@@ -1,22 +1,22 @@
 import pytest
-from tests.support.sap import InMemorySapClient, InMemorySapSession
+from tests.support.sap import InMemorySapConnection, InMemorySapSession
 
 from saphive import SapGuiPlaceholder, SapSessionError
-from saphive.sap import SapClient, SapSession
+from saphive.sap import SapConnection, SapSession
 
 
 def test_sap_placeholder_fails_without_configured_client() -> None:
     placeholder = SapGuiPlaceholder()
 
     with pytest.raises(SapSessionError, match="not been configured"):
-        placeholder.connect()
+        placeholder.active_session()
 
 
-def test_in_memory_sap_client_matches_protocols() -> None:
-    client = InMemorySapClient()
+def test_in_memory_sap_connection_matches_protocols() -> None:
+    connection = InMemorySapConnection()
 
-    assert isinstance(client, SapClient)
-    assert isinstance(client.connect(), SapSession)
+    assert isinstance(connection, SapConnection)
+    assert isinstance(connection.active_session(), SapSession)
 
 
 def test_in_memory_sap_session_records_operations() -> None:

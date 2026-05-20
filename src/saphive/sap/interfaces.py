@@ -1,9 +1,12 @@
 """SAP GUI abstraction interfaces used by SAPHive Core and scripts."""
 
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from saphive.core.errors import SapSessionError
+from saphive.core.errors import SapConnectionError, SapSessionError
+
+if TYPE_CHECKING:
+    from saphive.core.config import SapConnectionMode, SAPHiveConfig
 
 
 @runtime_checkable
@@ -27,17 +30,67 @@ class SapSession(Protocol):
 
 
 @runtime_checkable
-class SapClient(Protocol):
-    """Client capable of creating or returning a SAP GUI session."""
+class SapConnection(Protocol):
+    """Connection-scoped SAP APIs exposed to SAPHive scripts."""
 
-    def connect(self) -> SapSession:
-        """Connect to SAP GUI and return a session abstraction."""
+    @property
+    def connection_name(self) -> str:
+        """Return the selected SAP connection name."""
+
+    def list_sessions(self) -> tuple[SapSession, ...]:
+        """List sessions available inside the selected SAP connection."""
+
+    def attach_session(self, index: int = 0) -> SapSession:
+        """Attach to an existing session inside the selected SAP connection."""
+
+    def create_session(self) -> SapSession:
+        """Create a new session inside the selected SAP connection."""
+
+    def active_session(self) -> SapSession:
+        """Return the active or default session inside the selected SAP connection."""
+
+
+@runtime_checkable
+class SapConnectionResolver(Protocol):
+    """Resolver that selects or opens the SAP connection for a script run."""
+
+    def resolve_connection(
+        self,
+        *,
+        config: "SAPHiveConfig",
+        mode: "SapConnectionMode | None" = None,
+        connection_name: str | None = None,
+        auth_file: str | None = None,
+        config_path: str | None = None,
+        script_path: str | None = None,
+    ) -> SapConnection:
+        """Resolve the connection-scoped SAP object exposed as ctx.sap."""
 
 
 @dataclass(frozen=True, slots=True)
 class SapGuiPlaceholder:
-    """Placeholder SAP client used before a real SAP GUI client is configured."""
+    """Placeholder SAP connection used before a real SAP GUI connection is configured."""
 
-    def connect(self) -> SapSession:
-        """Fail clearly until a SAP GUI client is supplied."""
+    @property
+    def connection_name(self) -> str:
+        """Return a placeholder connection name."""
+        return "unconfigured"
+
+    def list_sessions(self) -> tuple[SapSession, ...]:
+        """Fail clearly until a SAP GUI connection is supplied."""
+        raise SapConnectionError("SAP GUI connection has not been configured yet.")
+
+    def attach_session(self, index: int = 0) -> SapSession:
+        """Fail clearly until a SAP GUI connection is supplied."""
+        raise SapSessionError(
+            "SAP GUI session handling has not been configured yet.",
+            details={"session_index": index},
+        )
+
+    def create_session(self) -> SapSession:
+        """Fail clearly until a SAP GUI connection is supplied."""
+        raise SapSessionError("SAP GUI session handling has not been configured yet.")
+
+    def active_session(self) -> SapSession:
+        """Fail clearly until a SAP GUI connection is supplied."""
         raise SapSessionError("SAP GUI session handling has not been configured yet.")

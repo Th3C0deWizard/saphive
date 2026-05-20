@@ -4,6 +4,8 @@ This document defines the initial packaging and distribution plan for SAPHive.
 
 The current decision is to keep SAPHive simple as one Python distribution named `saphive`. The distribution contains SAPHive Core, the CLI frontend, SAP abstractions, script runtime modules, and supporting utilities.
 
+The package readme is `README.md`. Detailed architecture and development notes remain in `docs/`.
+
 ## Packaging Decision
 
 Initial package model:
@@ -91,7 +93,7 @@ Current optional groups:
 
 | Group | Purpose |
 | --- | --- |
-| `dev` | Testing, linting, formatting, and type checking. |
+| `dev` | Build, testing, linting, formatting, and type checking. |
 | `excel` | Excel file support for automation scripts that process spreadsheets. |
 | `prefect` | Prefect integration examples or adapters. |
 | `api` | Future REST API experimentation. |
@@ -115,7 +117,14 @@ dist/saphive-<version>.tar.gz
 dist/saphive-<version>-py3-none-any.whl
 ```
 
-If the `build` module is not installed, install the development dependencies or add `build` to the development dependency group before formalizing release commands.
+The `build` package is part of the `dev` optional dependency group.
+
+Publication excludes:
+
+- Local auth files such as `.saphive.auth.toml`.
+- Local logs and run outputs.
+- Python caches and bytecode.
+- Build artifacts from previous builds.
 
 ## Local Install Verification
 
@@ -124,12 +133,10 @@ After building a wheel, validate installation in a clean environment.
 Checks:
 
 ```bash
-./venv/Scripts/python.exe -m pip install dist/saphive-<version>-py3-none-any.whl
+./venv/Scripts/python.exe -m pip install --force-reinstall dist/saphive-<version>-py3-none-any.whl
 ./venv/Scripts/python.exe -c "import saphive"
 ./venv/Scripts/python.exe -m saphive --help
 ```
-
-The exact CLI smoke command may change once the CLI implementation is added.
 
 ## Versioning Plan
 

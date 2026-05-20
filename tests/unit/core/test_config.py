@@ -6,7 +6,10 @@ from saphive import (
     ConfigurationError,
     LoggingConfig,
     SapConfig,
+    SapConnectionMode,
+    SapConnectionProfile,
     SAPHiveConfig,
+    find_cli_config,
     find_default_config,
     load_config,
     load_default_config,
@@ -23,9 +26,9 @@ def test_config_defaults_are_safe_for_wsl_unit_tests() -> None:
     assert config.runtime.default_timeout_seconds == DEFAULT_TIMEOUT_SECONDS
     assert config.logging.level == "INFO"
     assert config.logging.directory == Path("logs")
-    assert config.sap.connection_name is None
-    assert config.sap.client is None
-    assert config.sap.language == "EN"
+    assert config.sap.mode is SapConnectionMode.AUTO
+    assert config.sap.connection is None
+    assert config.sap.connections == {}
 
 
 def test_logging_config_normalizes_level() -> None:
@@ -35,9 +38,12 @@ def test_logging_config_normalizes_level() -> None:
 
 
 def test_sap_config_normalizes_language() -> None:
-    config = SapConfig(language="es")
+    config = SapConfig(
+        connection="dev",
+        connections={"dev": SapConnectionProfile(sap_logon_name="DEV", language="es")},
+    )
 
-    assert config.language == "ES"
+    assert config.connections["dev"].language == "ES"
 
 
 def test_load_config_from_explicit_toml_file(tmp_path: Path) -> None:
@@ -56,7 +62,11 @@ directory = "runtime_logs"
 jsonl_enabled = true
 
 [sap]
-connection_name = "PRD"
+mode = "open"
+connection = "prd"
+
+[sap.connections.prd]
+sap_logon_name = "PRD"
 client = "100"
 language = "en"
 """.strip(),
@@ -73,9 +83,11 @@ language = "en"
     assert config.logging.level == "DEBUG"
     assert config.logging.directory == (tmp_path / "runtime_logs").resolve()
     assert config.logging.jsonl_enabled is True
-    assert config.sap.connection_name == "PRD"
-    assert config.sap.client == "100"
-    assert config.sap.language == "EN"
+    assert config.sap.mode is SapConnectionMode.OPEN
+    assert config.sap.connection == "prd"
+    assert config.sap.connections["prd"].sap_logon_name == "PRD"
+    assert config.sap.connections["prd"].client == "100"
+    assert config.sap.connections["prd"].language == "EN"
 
 
 def test_load_config_preserves_absolute_paths(tmp_path: Path) -> None:
@@ -139,6 +151,35 @@ def test_find_default_config_searches_parent_directories(tmp_path: Path) -> None
     config_path.write_text("", encoding="utf-8")
 
     assert find_default_config(nested_dir) == config_path
+
+
+def test_find_cli_config_prefers_script_directory(tmp_path: Path) -> None:
+    script_dir = tmp_path / "scripts"
+    cli_config_dir = tmp_path / "cli-config"
+    script_dir.mkdir()
+    cli_config_dir.mkdir()
+    script_config = script_dir / "saphive.toml"
+    cli_config = cli_config_dir / "saphive.toml"
+    script_config.write_text("", encoding="utf-8")
+    cli_config.write_text("", encoding="utf-8")
+
+    assert (
+        find_cli_config(script_path=script_dir / "job.py", config_dir=cli_config_dir)
+        == script_config
+    )
+
+
+def test_find_cli_config_uses_os_config_directory(tmp_path: Path) -> None:
+    cli_config_dir = tmp_path / "cli-config"
+    cli_config_dir.mkdir()
+    cli_config = cli_config_dir / "saphive.toml"
+    cli_config.write_text("", encoding="utf-8")
+
+    assert find_cli_config(config_dir=cli_config_dir) == cli_config
+
+
+def test_find_cli_config_returns_none_when_no_file_exists(tmp_path: Path) -> None:
+    assert find_cli_config(config_dir=tmp_path) is None
 
 
 def test_load_default_config_raises_when_missing(tmp_path: Path) -> None:

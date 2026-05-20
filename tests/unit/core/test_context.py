@@ -2,7 +2,7 @@ from logging import getLogger
 from pathlib import Path
 
 import pytest
-from tests.support.sap import InMemorySapClient
+from tests.support.sap import InMemorySapConnection
 
 from saphive import (
     RuntimePaths,
@@ -103,11 +103,11 @@ def test_build_sap_context_attaches_sap_placeholder() -> None:
 
     assert isinstance(context.sap, SapGuiPlaceholder)
     with pytest.raises(SapSessionError, match="not been configured"):
-        context.sap.connect()
+        context.sap.active_session()
 
 
 def test_build_sap_context_accepts_sap_test_double() -> None:
-    sap = InMemorySapClient()
+    sap = InMemorySapConnection()
     context = build_sap_context(
         script=ScriptMetadata(name="create_notifications", description="Create notifications."),
         sap=sap,

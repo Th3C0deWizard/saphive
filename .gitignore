@@ -55,6 +55,12 @@ coverage.xml
 .pytest_cache/
 cover/
 
+# Local runtime outputs
+logs/
+**/logs/
+.saphive/runs/
+**/.saphive/runs/
+
 # Translations
 *.mo
 *.pot
@@ -131,6 +137,14 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+# SAPHive local secrets
+.saphive.auth.toml
+**/.saphive.auth.toml
+.saphive.auth.local.toml
+**/.saphive.auth.local.toml
+!.saphive.auth.example.toml
+!**/.saphive.auth.example.toml
 
 # Spyder project settings
 .spyderproject

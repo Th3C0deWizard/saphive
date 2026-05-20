@@ -1,8 +1,21 @@
 from pathlib import Path
 
-from tests.support.sap import InMemorySapClient, InMemorySapSession
+from tests.support.sap import (
+    InMemorySapConnection,
+    InMemorySapConnectionResolver,
+    InMemorySapSession,
+)
 
-from saphive import ExecutionStatus, PathsConfig, SAPHiveConfig, SapRuntime
+from saphive import (
+    ExecutionStatus,
+    LoggingConfig,
+    PathsConfig,
+    SapConfig,
+    SapConnectionMode,
+    SapConnectionProfile,
+    SAPHiveConfig,
+    SapRuntime,
+)
 
 
 def test_runtime_validate_script_runs_validate_only(tmp_path: Path) -> None:
@@ -130,13 +143,13 @@ def test_runtime_context_uses_injected_sap_client(tmp_path: Path) -> None:
         "sap_script",
         validate_body='ctx.set_output("validated", True)',
         run_body=(
-            'session = ctx.sap.connect()\n'
+            'session = ctx.sap.active_session()\n'
             '    session.start_transaction("IW21")\n'
             '    ctx.set_output("status", session.status_bar_text())'
         ),
     )
     sap_session = InMemorySapSession(status_text="Notification created")
-    runtime = SapRuntime(sap=InMemorySapClient(session=sap_session))
+    runtime = SapRuntime(sap=InMemorySapConnection(session=sap_session))
 
     result = runtime.run_script(script_path)
 
@@ -146,6 +159,65 @@ def test_runtime_context_uses_injected_sap_client(tmp_path: Path) -> None:
         ("start_transaction", "IW21"),
         ("status_bar_text", "wnd[0]/sbar"),
     ]
+
+
+def test_runtime_does_not_resolve_sap_when_validation_fails(tmp_path: Path) -> None:
+    script_path = tmp_path / "validation_blocks_sap.py"
+    _write_script(
+        script_path,
+        "validation_blocks_sap",
+        validate_body='raise ScriptValidationError("bad input")',
+        run_body='ctx.set_output("ran", True)',
+        imports="from saphive import ScriptValidationError",
+    )
+    resolver = InMemorySapConnectionResolver()
+    runtime = SapRuntime(config=_sap_config(), connection_resolver=resolver)
+
+    result = runtime.run_script(script_path)
+
+    assert result.status is ExecutionStatus.VALIDATION_FAILED
+    assert resolver.resolved_modes == []
+
+
+def test_runtime_resolves_sap_after_validation_for_run(tmp_path: Path) -> None:
+    script_path = tmp_path / "connection_scoped_sap.py"
+    _write_script(
+        script_path,
+        "connection_scoped_sap",
+        validate_body='ctx.set_output("validated", True)',
+        run_body=(
+            'ctx.set_output("connection", ctx.sap.connection_name)\n'
+            '    session = ctx.sap.create_session()\n'
+            '    session.start_transaction("IW21")'
+        ),
+    )
+    resolver = InMemorySapConnectionResolver()
+    runtime = SapRuntime(config=_sap_config(), connection_resolver=resolver)
+
+    result = runtime.run_script(script_path)
+
+    assert result.status is ExecutionStatus.SUCCESS
+    assert result.outputs == {"validated": True, "connection": "prd"}
+    assert resolver.resolved_modes == [SapConnectionMode.AUTO]
+    assert resolver.connection.created_sessions[0].operations == [("start_transaction", "IW21")]
+
+
+def test_runtime_includes_log_path_in_result(tmp_path: Path) -> None:
+    script_path = tmp_path / "logged_script.py"
+    logs_dir = tmp_path / "logs"
+    _write_script(
+        script_path,
+        "logged_script",
+        validate_body='ctx.set_output("validated", True)',
+        run_body='ctx.set_output("ran", True)',
+    )
+    runtime = SapRuntime(config=SAPHiveConfig(logging=LoggingConfig(directory=logs_dir)))
+
+    result = runtime.run_script(script_path, run_id="run-logs")
+
+    assert result.status is ExecutionStatus.SUCCESS
+    assert result.logs_path == logs_dir / "run-logs.log"
+    assert result.logs_path.is_file()
 
 
 def _write_script(
@@ -170,4 +242,14 @@ def run(ctx):
     {run_body}
 '''.strip(),
         encoding="utf-8",
+    )
+
+
+def _sap_config() -> SAPHiveConfig:
+    return SAPHiveConfig(
+        sap=SapConfig(
+            mode=SapConnectionMode.AUTO,
+            connection="prd",
+            connections={"prd": SapConnectionProfile(sap_logon_name="PRD", client="100")},
+        )
     )
