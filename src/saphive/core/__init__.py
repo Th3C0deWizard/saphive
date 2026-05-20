@@ -10,7 +10,7 @@ from saphive.core.config import (
     load_config,
     load_default_config,
 )
-from saphive.core.context import RuntimePaths, SapContext, SapGuiPlaceholder, build_sap_context
+from saphive.core.context import RuntimePaths, SapContext, build_sap_context
 from saphive.core.errors import (
     ConfigurationError,
     SapConnectionError,
@@ -26,6 +26,7 @@ from saphive.core.errors import (
 from saphive.core.metadata import ScriptMetadata
 from saphive.core.results import ExecutionStatus, ScriptExecutionResult
 from saphive.core.runtime import SapRuntime
+from saphive.sap.interfaces import SapGuiPlaceholder
 
 __all__ = [
     "ConfigurationError",

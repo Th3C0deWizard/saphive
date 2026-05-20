@@ -6,8 +6,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from saphive.core.config import SAPHiveConfig
-from saphive.core.errors import SapSessionError
 from saphive.core.metadata import ScriptMetadata
+from saphive.sap.interfaces import SapClient, SapGuiPlaceholder
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,15 +17,6 @@ class RuntimePaths:
     workdir: Path
     logs_dir: Path
     run_dir: Path
-
-
-@dataclass(frozen=True, slots=True)
-class SapGuiPlaceholder:
-    """Placeholder SAP object used before the Windows SAP GUI boundary exists."""
-
-    def connect(self) -> None:
-        """Fail clearly until the SAP GUI boundary is implemented."""
-        raise SapSessionError("SAP GUI session handling has not been configured yet.")
 
 
 @dataclass(slots=True)
@@ -38,7 +29,7 @@ class SapContext:
     paths: RuntimePaths
     config: SAPHiveConfig
     logger: Logger
-    sap: SapGuiPlaceholder
+    sap: SapClient
     inputs: dict[str, object] = field(default_factory=dict)
     outputs: dict[str, object] = field(default_factory=dict)
 
@@ -55,7 +46,7 @@ def build_sap_context(
     run_id: str | None = None,
     workdir: str | Path | None = None,
     logger: Logger | None = None,
-    sap: SapGuiPlaceholder | None = None,
+    sap: SapClient | None = None,
 ) -> SapContext:
     """Build a consistent runtime context for validation or execution paths."""
     resolved_config = SAPHiveConfig() if config is None else config

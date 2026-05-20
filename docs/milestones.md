@@ -165,17 +165,17 @@ Exit criteria:
 
 ## Milestone 8: SAP GUI Boundary
 
-Status: not started
+Status: complete
 
 Checklist:
 
-- [ ] Define SAP abstraction interface.
-- [ ] Define Windows-specific SAP GUI implementation boundary.
-- [ ] Guard `pywin32` imports from generic WSL test paths.
-- [ ] Define SAP connection errors.
-- [ ] Define SAP session errors.
-- [ ] Define SAP GUI operation errors.
-- [ ] Add test doubles for SAP sessions.
+- [x] Define SAP abstraction interface.
+- [x] Define Windows-specific SAP GUI implementation boundary.
+- [x] Guard `pywin32` imports from generic WSL test paths.
+- [x] Define SAP connection errors.
+- [x] Define SAP session errors.
+- [x] Define SAP GUI operation errors.
+- [x] Add test doubles for SAP sessions.
 
 Exit criteria:
 
