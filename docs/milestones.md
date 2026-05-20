@@ -185,18 +185,18 @@ Exit criteria:
 
 ## Milestone 9: Core Runtime Executor
 
-Status: not started
+Status: complete
 
 Checklist:
 
-- [ ] Implement validation-only flow.
-- [ ] Implement full run flow.
-- [ ] Call script `validate(ctx)`.
-- [ ] Call script `run(ctx)`.
-- [ ] Capture successful result.
-- [ ] Capture validation failure result.
-- [ ] Capture execution failure result.
-- [ ] Add tests with fake automation scripts.
+- [x] Implement validation-only flow.
+- [x] Implement full run flow.
+- [x] Call script `validate(ctx)`.
+- [x] Call script `run(ctx)`.
+- [x] Capture successful result.
+- [x] Capture validation failure result.
+- [x] Capture execution failure result.
+- [x] Add tests with fake automation scripts.
 
 Exit criteria:
 
