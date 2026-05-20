@@ -107,18 +107,18 @@ Exit criteria:
 
 ## Milestone 5: Script Discovery and Registry
 
-Status: not started
+Status: complete
 
 Checklist:
 
-- [ ] Discover single-file scripts from configured directories.
-- [ ] Discover package-directory scripts from configured directories.
-- [ ] Build script registry.
-- [ ] Detect duplicate script names.
-- [ ] Support metadata listing.
-- [ ] Add tests for empty directories.
-- [ ] Add tests for invalid scripts.
-- [ ] Add tests for duplicate names.
+- [x] Discover single-file scripts from configured directories.
+- [x] Discover package-directory scripts from configured directories.
+- [x] Build script registry.
+- [x] Detect duplicate script names.
+- [x] Support metadata listing.
+- [x] Add tests for empty directories.
+- [x] Add tests for invalid scripts.
+- [x] Add tests for duplicate names.
 
 Exit criteria:
 
