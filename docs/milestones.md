@@ -206,18 +206,18 @@ Exit criteria:
 
 ## Milestone 10: CLI Frontend
 
-Status: not started
+Status: complete
 
 Checklist:
 
-- [ ] Implement CLI entry point.
-- [ ] Implement `saphive scripts list`.
-- [ ] Implement `saphive scripts inspect <name>`.
-- [ ] Implement `saphive scripts validate <name>`.
-- [ ] Implement `saphive scripts run <name>`.
-- [ ] Implement `saphive run <path>`.
-- [ ] Map domain errors to exit codes.
-- [ ] Add CLI tests with fake automation scripts.
+- [x] Implement CLI entry point.
+- [x] Implement `saphive scripts list`.
+- [x] Implement `saphive scripts inspect <name>`.
+- [x] Implement `saphive scripts validate <name>`.
+- [x] Implement `saphive scripts run <name>`.
+- [x] Implement `saphive run <path>`.
+- [x] Map domain errors to exit codes.
+- [x] Add CLI tests with fake automation scripts.
 
 Exit criteria:
 
