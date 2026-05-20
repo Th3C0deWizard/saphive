@@ -67,18 +67,18 @@ Exit criteria:
 
 ## Milestone 3: Configuration
 
-Status: not started
+Status: complete
 
 Checklist:
 
-- [ ] Define configuration model.
-- [ ] Define script path configuration.
-- [ ] Define runtime configuration.
-- [ ] Define logging configuration.
-- [ ] Define SAP connection configuration fields.
-- [ ] Implement config loading from explicit path.
-- [ ] Implement default config lookup if needed.
-- [ ] Add validation tests.
+- [x] Define configuration model.
+- [x] Define script path configuration.
+- [x] Define runtime configuration.
+- [x] Define logging configuration.
+- [x] Define SAP connection configuration fields.
+- [x] Implement config loading from explicit path.
+- [x] Implement default config lookup if needed.
+- [x] Add validation tests.
 
 Exit criteria:
 

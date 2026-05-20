@@ -1,5 +1,15 @@
 """Core runtime package for SAPHive."""
 
+from saphive.core.config import (
+    LoggingConfig,
+    PathsConfig,
+    RuntimeConfig,
+    SapConfig,
+    SAPHiveConfig,
+    find_default_config,
+    load_config,
+    load_default_config,
+)
 from saphive.core.context import SapContext
 from saphive.core.errors import (
     ConfigurationError,
@@ -20,7 +30,12 @@ from saphive.core.runtime import SapRuntime
 __all__ = [
     "ConfigurationError",
     "ExecutionStatus",
+    "LoggingConfig",
+    "PathsConfig",
+    "RuntimeConfig",
+    "SAPHiveConfig",
     "SAPHiveError",
+    "SapConfig",
     "SapConnectionError",
     "SapContext",
     "SapGuiError",
@@ -33,4 +48,7 @@ __all__ = [
     "ScriptLoadError",
     "ScriptMetadata",
     "ScriptValidationError",
+    "find_default_config",
+    "load_config",
+    "load_default_config",
 ]

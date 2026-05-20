@@ -3,9 +3,14 @@
 from saphive.core import (
     ConfigurationError,
     ExecutionStatus,
+    LoggingConfig,
+    PathsConfig,
+    RuntimeConfig,
+    SapConfig,
     SapConnectionError,
     SapContext,
     SapGuiError,
+    SAPHiveConfig,
     SAPHiveError,
     SapRuntime,
     SapSessionError,
@@ -16,6 +21,9 @@ from saphive.core import (
     ScriptLoadError,
     ScriptMetadata,
     ScriptValidationError,
+    find_default_config,
+    load_config,
+    load_default_config,
 )
 
 __version__ = "0.1.0"
@@ -23,7 +31,12 @@ __version__ = "0.1.0"
 __all__ = [
     "ConfigurationError",
     "ExecutionStatus",
+    "LoggingConfig",
+    "PathsConfig",
+    "RuntimeConfig",
+    "SAPHiveConfig",
     "SAPHiveError",
+    "SapConfig",
     "SapConnectionError",
     "SapContext",
     "SapGuiError",
@@ -37,4 +50,7 @@ __all__ = [
     "ScriptMetadata",
     "ScriptValidationError",
     "__version__",
+    "find_default_config",
+    "load_config",
+    "load_default_config",
 ]
