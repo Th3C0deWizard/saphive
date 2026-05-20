@@ -87,18 +87,18 @@ Exit criteria:
 
 ## Milestone 4: Script Contract Validation
 
-Status: not started
+Status: complete
 
 Checklist:
 
-- [ ] Define required script attributes.
-- [ ] Define required script functions.
-- [ ] Validate `SCRIPT_NAME`.
-- [ ] Validate `DESCRIPTION`.
-- [ ] Validate `validate(ctx)` signature.
-- [ ] Validate `run(ctx)` signature.
-- [ ] Extract script metadata.
-- [ ] Add valid and invalid script test cases.
+- [x] Define required script attributes.
+- [x] Define required script functions.
+- [x] Validate `SCRIPT_NAME`.
+- [x] Validate `DESCRIPTION`.
+- [x] Validate `validate(ctx)` signature.
+- [x] Validate `run(ctx)` signature.
+- [x] Extract script metadata.
+- [x] Add valid and invalid script test cases.
 
 Exit criteria:
 
