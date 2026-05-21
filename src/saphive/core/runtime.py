@@ -77,7 +77,7 @@ class SapRuntime:
         try:
             loaded_script = self._load_script(script)
         except SAPHiveError as exc:
-            logger.exception("SAPHive script load failed")
+            _log_failure(logger, "SAPHive script load failed", run_id=resolved_run_id, error=exc)
             return _failed_result(
                 script_name=str(script),
                 run_id=resolved_run_id,
@@ -100,6 +100,7 @@ class SapRuntime:
             validation_context,
             started_at,
             logs_path,
+            logger,
         )
         if validation_result is not None:
             logger.info(
@@ -124,7 +125,13 @@ class SapRuntime:
                     script_path=str(loaded_script.source_path),
                 )
             except SAPHiveError as exc:
-                logger.exception("SAPHive SAP connection resolution failed")
+                _log_failure(
+                    logger,
+                    "SAPHive SAP connection resolution failed",
+                    run_id=validation_context.run_id,
+                    error=exc,
+                    outputs=validation_context.outputs,
+                )
                 return _failed_result(
                     script_name=validation_context.script.name,
                     run_id=validation_context.run_id,
@@ -156,7 +163,7 @@ class SapRuntime:
         )
         context.outputs.update(validation_context.outputs)
 
-        execution_result = _run_loaded_script(loaded_script, context, started_at, logs_path)
+        execution_result = _run_loaded_script(loaded_script, context, started_at, logs_path, logger)
         result = execution_result or _success_result(context, started_at, logs_path)
         logger.info(
             "SAPHive run finished",
@@ -192,12 +199,27 @@ def _validate_loaded_script(
     context: SapContext,
     started_at: datetime,
     logs_path: Path | None,
+    logger: Logger,
 ) -> ScriptExecutionResult | None:
     try:
         loaded_script.validate(context)
     except ScriptValidationError as exc:
+        _log_failure(
+            logger,
+            "SAPHive validation failed",
+            run_id=context.run_id,
+            error=exc,
+            outputs=context.outputs,
+        )
         return _validation_failed_result(context, started_at, exc, logs_path)
     except SAPHiveError as exc:
+        _log_failure(
+            logger,
+            "SAPHive validation failed",
+            run_id=context.run_id,
+            error=exc,
+            outputs=context.outputs,
+        )
         return _failed_result(
             script_name=context.script.name,
             run_id=context.run_id,
@@ -207,6 +229,13 @@ def _validate_loaded_script(
             logs_path=logs_path,
         )
     except Exception as exc:
+        _log_failure(
+            logger,
+            "SAPHive validation crashed",
+            run_id=context.run_id,
+            error=exc,
+            outputs=context.outputs,
+        )
         return _failed_result(
             script_name=context.script.name,
             run_id=context.run_id,
@@ -224,10 +253,18 @@ def _run_loaded_script(
     context: SapContext,
     started_at: datetime,
     logs_path: Path | None,
+    logger: Logger,
 ) -> ScriptExecutionResult | None:
     try:
         loaded_script.run(context)
     except ScriptExecutionError as exc:
+        _log_failure(
+            logger,
+            "SAPHive script execution failed",
+            run_id=context.run_id,
+            error=exc,
+            outputs=context.outputs,
+        )
         return _failed_result(
             script_name=context.script.name,
             run_id=context.run_id,
@@ -237,6 +274,13 @@ def _run_loaded_script(
             logs_path=logs_path,
         )
     except SAPHiveError as exc:
+        _log_failure(
+            logger,
+            "SAPHive script execution failed",
+            run_id=context.run_id,
+            error=exc,
+            outputs=context.outputs,
+        )
         return _failed_result(
             script_name=context.script.name,
             run_id=context.run_id,
@@ -246,6 +290,13 @@ def _run_loaded_script(
             logs_path=logs_path,
         )
     except Exception as exc:
+        _log_failure(
+            logger,
+            "SAPHive script execution crashed",
+            run_id=context.run_id,
+            error=exc,
+            outputs=context.outputs,
+        )
         return _failed_result(
             script_name=context.script.name,
             run_id=context.run_id,
@@ -310,6 +361,39 @@ def _failed_result(
         logs_path=logs_path,
         outputs=dict(outputs or {}),
         error=error.message,
+    )
+
+
+def _log_failure(
+    logger: Logger,
+    message: str,
+    *,
+    run_id: str,
+    error: BaseException,
+    outputs: dict[str, object] | None = None,
+) -> None:
+    logger.error(
+        "%s: %s",
+        message,
+        error,
+        extra={"run_id": run_id, "error_type": type(error).__name__},
+    )
+    if not logger.isEnabledFor(logging.DEBUG):
+        return
+
+    details = getattr(error, "details", None)
+    debug_lines = [
+        f"{message} debug details",
+        f"run_id={run_id}",
+        f"error_type={type(error).__module__}.{type(error).__qualname__}",
+        f"error_message={error}",
+        f"error_details={details!r}",
+        f"outputs={dict(outputs or {})!r}",
+    ]
+    logger.debug(
+        "\n".join(debug_lines),
+        exc_info=True,
+        extra={"run_id": run_id, "error_type": type(error).__name__},
     )
 
 

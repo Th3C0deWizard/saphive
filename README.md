@@ -54,6 +54,18 @@ Configuration and auth are resolved in this order:
 4. Files in the OS-specific SAPHive CLI config directory.
 5. Built-in default values from code.
 
+## Logging
+
+Each run writes a local log file and returns its path in the execution result. Set the logging
+level to `DEBUG` when a run needs full failure diagnostics, including exception type, SAPHive
+error details, current script outputs, and traceback.
+
+```toml
+[logging]
+level = "DEBUG"
+directory = "logs"
+```
+
 ## SAP Auth
 
 Do not put raw passwords in `saphive.toml` or CLI arguments. Use `.saphive.auth.toml`:

@@ -220,6 +220,51 @@ def test_runtime_includes_log_path_in_result(tmp_path: Path) -> None:
     assert result.logs_path.is_file()
 
 
+def test_runtime_debug_log_includes_failure_details_and_traceback(tmp_path: Path) -> None:
+    script_path = tmp_path / "debug_failure.py"
+    logs_dir = tmp_path / "logs"
+    _write_script(
+        script_path,
+        "debug_failure",
+        validate_body='ctx.set_output("validated", True)',
+        run_body='raise RuntimeError("boom")',
+    )
+    runtime = SapRuntime(
+        config=SAPHiveConfig(logging=LoggingConfig(level="DEBUG", directory=logs_dir))
+    )
+
+    result = runtime.run_script(script_path, run_id="run-debug-failure")
+
+    assert result.status is ExecutionStatus.FAILED
+    assert result.logs_path is not None
+    log_text = result.logs_path.read_text(encoding="utf-8")
+    assert "SAPHive script execution crashed debug details" in log_text
+    assert "error_type=builtins.RuntimeError" in log_text
+    assert "outputs={'validated': True}" in log_text
+    assert "Traceback (most recent call last)" in log_text
+    assert 'raise RuntimeError("boom")' in log_text
+
+
+def test_runtime_info_log_omits_failure_traceback(tmp_path: Path) -> None:
+    script_path = tmp_path / "info_failure.py"
+    logs_dir = tmp_path / "logs"
+    _write_script(
+        script_path,
+        "info_failure",
+        validate_body='ctx.set_output("validated", True)',
+        run_body='raise RuntimeError("boom")',
+    )
+    runtime = SapRuntime(config=SAPHiveConfig(logging=LoggingConfig(directory=logs_dir)))
+
+    result = runtime.run_script(script_path, run_id="run-info-failure")
+
+    assert result.status is ExecutionStatus.FAILED
+    assert result.logs_path is not None
+    log_text = result.logs_path.read_text(encoding="utf-8")
+    assert "SAPHive script execution crashed: boom" in log_text
+    assert "Traceback (most recent call last)" not in log_text
+
+
 def _write_script(
     path: Path,
     script_name: str,
