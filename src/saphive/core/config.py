@@ -24,6 +24,15 @@ class SapConnectionMode(StrEnum):
     OPEN = "open"
 
 
+class SapCleanupMode(StrEnum):
+    """SAP cleanup policy applied after a script run."""
+
+    NONE = "none"
+    CREATED_SESSIONS = "created-sessions"
+    CONNECTION = "connection"
+    APPLICATION = "application"
+
+
 class PathsConfig(BaseModel):
     """Filesystem paths used by the SAPHive runtime."""
 
@@ -84,6 +93,8 @@ class SapConfig(BaseModel):
 
     mode: SapConnectionMode = SapConnectionMode.AUTO
     connection: str | None = None
+    cleanup: SapCleanupMode = SapCleanupMode.CREATED_SESSIONS
+    cleanup_force: bool = False
     connections: dict[str, SapConnectionProfile] = Field(default_factory=dict)
 
 

@@ -17,6 +17,10 @@ def test_in_memory_sap_connection_matches_protocols() -> None:
 
     assert isinstance(connection, SapConnection)
     assert isinstance(connection.active_session(), SapSession)
+    assert (
+        connection.with_connection(lambda raw_connection: raw_connection.connection_name)
+        == "test"
+    )
 
 
 def test_in_memory_sap_session_records_operations() -> None:

@@ -8,6 +8,7 @@ import typer
 from saphive.core import (
     ConfigurationError,
     ExecutionStatus,
+    SapCleanupMode,
     SapConnectionMode,
     SAPHiveConfig,
     SAPHiveError,
@@ -61,6 +62,20 @@ SapAuthFileOption = Annotated[
         exists=True,
         dir_okay=False,
         readable=True,
+    ),
+]
+SapCleanupOption = Annotated[
+    SapCleanupMode | None,
+    typer.Option(
+        "--sap-cleanup",
+        help="SAP cleanup after run: none, created-sessions, connection, or application.",
+    ),
+]
+SapCleanupForceOption = Annotated[
+    bool,
+    typer.Option(
+        "--sap-cleanup-force",
+        help="Allow connection cleanup for attached/pre-existing SAP connections.",
     ),
 ]
 
@@ -129,9 +144,18 @@ def run_named_script(
     sap_mode: SapModeOption = None,
     sap_connection: SapConnectionOption = None,
     sap_auth_file: SapAuthFileOption = None,
+    sap_cleanup: SapCleanupOption = None,
+    sap_cleanup_force: SapCleanupForceOption = False,
 ) -> None:
     """Run a discovered SAPHive script."""
-    runtime = _build_runtime(config, sap_mode, sap_connection, sap_auth_file)
+    runtime = _build_runtime(
+        config,
+        sap_mode,
+        sap_connection,
+        sap_auth_file,
+        sap_cleanup=sap_cleanup,
+        sap_cleanup_force=sap_cleanup_force,
+    )
     result = runtime.run_script(script_name, inputs=_parse_inputs(inputs))
     _print_result(result)
     raise typer.Exit(_exit_code_for_result(result))
@@ -145,9 +169,19 @@ def run_script_path(
     sap_mode: SapModeOption = None,
     sap_connection: SapConnectionOption = None,
     sap_auth_file: SapAuthFileOption = None,
+    sap_cleanup: SapCleanupOption = None,
+    sap_cleanup_force: SapCleanupForceOption = False,
 ) -> None:
     """Run a SAPHive script from an explicit file or package path."""
-    runtime = _build_runtime(config, sap_mode, sap_connection, sap_auth_file, script_path)
+    runtime = _build_runtime(
+        config,
+        sap_mode,
+        sap_connection,
+        sap_auth_file,
+        script_path,
+        sap_cleanup=sap_cleanup,
+        sap_cleanup_force=sap_cleanup_force,
+    )
     result = runtime.run_script(script_path, inputs=_parse_inputs(inputs))
     _print_result(result)
     raise typer.Exit(_exit_code_for_result(result))
@@ -164,6 +198,9 @@ def _build_runtime(
     sap_connection: str | None = None,
     sap_auth_file: Path | None = None,
     script_path: Path | None = None,
+    *,
+    sap_cleanup: SapCleanupMode | None = None,
+    sap_cleanup_force: bool = False,
 ) -> SapRuntime:
     try:
         config, resolved_config_path = _load_cli_config(config_path, script_path=script_path)
@@ -176,6 +213,8 @@ def _build_runtime(
         auth_file=sap_auth_file,
         sap_mode=sap_mode,
         sap_connection=sap_connection,
+        sap_cleanup=sap_cleanup,
+        sap_cleanup_force=sap_cleanup_force,
     )
 
 

@@ -1,12 +1,15 @@
 """SAP GUI abstraction interfaces used by SAPHive Core and scripts."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar, runtime_checkable
 
 from saphive.core.errors import SapConnectionError, SapSessionError
 
 if TYPE_CHECKING:
     from saphive.core.config import SapConnectionMode, SAPHiveConfig
+
+T = TypeVar("T")
 
 
 @runtime_checkable
@@ -48,6 +51,21 @@ class SapConnection(Protocol):
 
     def active_session(self) -> SapSession:
         """Return the active or default session inside the selected SAP connection."""
+
+    def with_connection(self, callback: Callable[[Any], T]) -> T:
+        """Run a callback with the raw connection object inside SAPHive recovery handling."""
+
+    def safe_execute(self, callback: Callable[[], T]) -> T:
+        """Run arbitrary code inside SAPHive lazy COM recovery handling."""
+
+    def close_created_sessions(self) -> None:
+        """Close SAP sessions created through this connection wrapper."""
+
+    def close_connection(self, *, force: bool = False) -> None:
+        """Close the selected SAP connection when permitted by runtime policy."""
+
+    def close_application(self) -> None:
+        """Close the SAP GUI application."""
 
 
 @runtime_checkable
@@ -94,3 +112,23 @@ class SapGuiPlaceholder:
     def active_session(self) -> SapSession:
         """Fail clearly until a SAP GUI connection is supplied."""
         raise SapSessionError("SAP GUI session handling has not been configured yet.")
+
+    def with_connection(self, callback: Callable[[Any], T]) -> T:
+        """Fail clearly until a SAP GUI connection is supplied."""
+        raise SapConnectionError("SAP GUI connection has not been configured yet.")
+
+    def safe_execute(self, callback: Callable[[], T]) -> T:
+        """Fail clearly until a SAP GUI connection is supplied."""
+        raise SapConnectionError("SAP GUI connection has not been configured yet.")
+
+    def close_created_sessions(self) -> None:
+        """Fail clearly until a SAP GUI connection is supplied."""
+        raise SapConnectionError("SAP GUI connection has not been configured yet.")
+
+    def close_connection(self, *, force: bool = False) -> None:
+        """Fail clearly until a SAP GUI connection is supplied."""
+        raise SapConnectionError("SAP GUI connection has not been configured yet.")
+
+    def close_application(self) -> None:
+        """Fail clearly until a SAP GUI connection is supplied."""
+        raise SapConnectionError("SAP GUI connection has not been configured yet.")

@@ -37,6 +37,11 @@ class LoadedScript:
         """Return loaded script run function."""
         return self.contract.run
 
+    @property
+    def cleanup(self) -> ScriptFunction | None:
+        """Return loaded script cleanup function when present."""
+        return self.contract.cleanup
+
 
 def load_script_from_registry(registry: ScriptRegistry, script_name: str) -> LoadedScript:
     """Load a SAPHive script by name from an existing script registry."""

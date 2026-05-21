@@ -1,18 +1,20 @@
 """Core runtime facade for SAPHive."""
 
 import logging
-from dataclasses import dataclass, field
+from contextlib import nullcontext
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from logging import Logger
 from pathlib import Path
 from uuid import uuid4
 
-from saphive.core.config import SapConnectionMode, SAPHiveConfig
+from saphive.core.config import SapCleanupMode, SapConnectionMode, SAPHiveConfig
 from saphive.core.context import SapContext, build_sap_context
 from saphive.core.errors import SAPHiveError, ScriptExecutionError, ScriptValidationError
 from saphive.core.results import ExecutionStatus, ScriptExecutionResult
 from saphive.sap.interfaces import SapConnection, SapConnectionResolver
 from saphive.sap.resolver import DefaultSapConnectionResolver, normalize_auth_path
+from saphive.sap.windows import sap_com_initialized
 from saphive.scripts.discovery import discover_scripts
 from saphive.scripts.loader import LoadedScript, load_script_from_path, load_script_from_registry
 from saphive.scripts.registry import ScriptRegistry
@@ -27,6 +29,8 @@ class SapRuntime:
     auth_file: Path | None = None
     sap_mode: SapConnectionMode | None = None
     sap_connection: str | None = None
+    sap_cleanup: SapCleanupMode | None = None
+    sap_cleanup_force: bool = False
     workdir: Path | None = None
     logger: Logger | None = None
     sap: SapConnection | None = None
@@ -114,62 +118,108 @@ class SapRuntime:
             logger.info("SAPHive validation succeeded", extra={"run_id": resolved_run_id})
             return result
 
-        if self.sap is not None or _should_resolve_sap(self):
-            try:
-                sap_connection = self.sap or self.connection_resolver.resolve_connection(
+        should_prepare_sap = self.sap is not None or _should_resolve_sap(self)
+        sap_scope = sap_com_initialized() if should_prepare_sap else nullcontext()
+        try:
+            with sap_scope:
+                if should_prepare_sap:
+                    try:
+                        sap_connection = self.sap or self.connection_resolver.resolve_connection(
+                            config=self.config,
+                            mode=self.sap_mode,
+                            connection_name=self.sap_connection,
+                            auth_file=normalize_auth_path(self.auth_file),
+                            config_path=normalize_auth_path(self.config_path),
+                            script_path=str(loaded_script.source_path),
+                        )
+                    except SAPHiveError as exc:
+                        _log_failure(
+                            logger,
+                            "SAPHive SAP connection resolution failed",
+                            run_id=validation_context.run_id,
+                            error=exc,
+                            outputs=validation_context.outputs,
+                        )
+                        return _failed_result(
+                            script_name=validation_context.script.name,
+                            run_id=validation_context.run_id,
+                            started_at=started_at,
+                            error=exc,
+                            outputs=validation_context.outputs,
+                            logs_path=logs_path,
+                        )
+                else:
+                    sap_connection = None
+
+                if sap_connection is not None:
+                    logger.info(
+                        "SAPHive SAP connection resolved",
+                        extra={
+                            "run_id": resolved_run_id,
+                            "sap_connection": sap_connection.connection_name,
+                        },
+                    )
+
+                context = build_sap_context(
+                    script=loaded_script.metadata,
                     config=self.config,
-                    mode=self.sap_mode,
-                    connection_name=self.sap_connection,
-                    auth_file=normalize_auth_path(self.auth_file),
-                    config_path=normalize_auth_path(self.config_path),
-                    script_path=str(loaded_script.source_path),
+                    inputs=inputs,
+                    run_id=resolved_run_id,
+                    workdir=self.workdir,
+                    logger=logger,
+                    sap=sap_connection,
                 )
-            except SAPHiveError as exc:
-                _log_failure(
+                context.outputs.update(validation_context.outputs)
+
+                execution_result = _run_loaded_script(
+                    loaded_script,
+                    context,
+                    started_at,
+                    logs_path,
                     logger,
-                    "SAPHive SAP connection resolution failed",
-                    run_id=validation_context.run_id,
-                    error=exc,
-                    outputs=validation_context.outputs,
                 )
-                return _failed_result(
-                    script_name=validation_context.script.name,
-                    run_id=validation_context.run_id,
-                    started_at=started_at,
-                    error=exc,
-                    outputs=validation_context.outputs,
-                    logs_path=logs_path,
+                result = execution_result or _success_result(context, started_at, logs_path)
+                cleanup_error = _cleanup_loaded_script(loaded_script, context, logger)
+                sap_cleanup_error = _cleanup_sap_connection(
+                    sap_connection,
+                    cleanup_mode=self.sap_cleanup or self.config.sap.cleanup,
+                    force=self.sap_cleanup_force or self.config.sap.cleanup_force,
+                    logger=logger,
+                    run_id=context.run_id,
+                    outputs=context.outputs,
                 )
-        else:
-            sap_connection = None
-
-        if sap_connection is not None:
-            logger.info(
-                "SAPHive SAP connection resolved",
-                extra={
-                    "run_id": resolved_run_id,
-                    "sap_connection": sap_connection.connection_name,
-                },
+                result = replace(result, outputs=dict(context.outputs))
+                cleanup_failure = cleanup_error or sap_cleanup_error
+                if cleanup_failure is not None and result.status is ExecutionStatus.SUCCESS:
+                    result = _failed_result(
+                        script_name=context.script.name,
+                        run_id=context.run_id,
+                        started_at=started_at,
+                        error=cleanup_failure,
+                        outputs=context.outputs,
+                        logs_path=logs_path,
+                    )
+                logger.info(
+                    "SAPHive run finished",
+                    extra={"status": result.status.value, "run_id": resolved_run_id},
+                )
+                return result
+        except SAPHiveError as exc:
+            _log_failure(
+                logger,
+                "SAPHive SAP COM initialization failed",
+                run_id=validation_context.run_id,
+                error=exc,
+                outputs=validation_context.outputs,
             )
-
-        context = build_sap_context(
-            script=loaded_script.metadata,
-            config=self.config,
-            inputs=inputs,
-            run_id=resolved_run_id,
-            workdir=self.workdir,
-            logger=logger,
-            sap=sap_connection,
-        )
-        context.outputs.update(validation_context.outputs)
-
-        execution_result = _run_loaded_script(loaded_script, context, started_at, logs_path, logger)
-        result = execution_result or _success_result(context, started_at, logs_path)
-        logger.info(
-            "SAPHive run finished",
-            extra={"status": result.status.value, "run_id": resolved_run_id},
-        )
-        return result
+            return _failed_result(
+                script_name=validation_context.script.name,
+                run_id=validation_context.run_id,
+                started_at=started_at,
+                error=exc,
+                outputs=validation_context.outputs,
+                logs_path=logs_path,
+            )
 
     def _load_script(self, script: str | Path) -> "LoadedScript":
         if isinstance(script, Path):
@@ -306,6 +356,86 @@ def _run_loaded_script(
             logs_path=logs_path,
         )
 
+    return None
+
+
+def _cleanup_loaded_script(
+    loaded_script: LoadedScript,
+    context: SapContext,
+    logger: Logger,
+) -> SAPHiveError | None:
+    if loaded_script.cleanup is None:
+        return None
+
+    try:
+        loaded_script.cleanup(context)
+    except SAPHiveError as exc:
+        _log_failure(
+            logger,
+            "SAPHive script cleanup failed",
+            run_id=context.run_id,
+            error=exc,
+            outputs=context.outputs,
+        )
+        return exc
+    except Exception as exc:
+        error = ScriptExecutionError(f"SAPHive script cleanup failed: {exc}")
+        _log_failure(
+            logger,
+            "SAPHive script cleanup crashed",
+            run_id=context.run_id,
+            error=exc,
+            outputs=context.outputs,
+        )
+        return error
+
+    logger.info("SAPHive script cleanup succeeded", extra={"run_id": context.run_id})
+    return None
+
+
+def _cleanup_sap_connection(
+    sap_connection: SapConnection | None,
+    *,
+    cleanup_mode: SapCleanupMode,
+    force: bool,
+    logger: Logger,
+    run_id: str,
+    outputs: dict[str, object],
+) -> SAPHiveError | None:
+    if sap_connection is None or cleanup_mode is SapCleanupMode.NONE:
+        return None
+
+    try:
+        if cleanup_mode is SapCleanupMode.CREATED_SESSIONS:
+            sap_connection.close_created_sessions()
+        elif cleanup_mode is SapCleanupMode.CONNECTION:
+            sap_connection.close_connection(force=force)
+        elif cleanup_mode is SapCleanupMode.APPLICATION:
+            sap_connection.close_application()
+    except SAPHiveError as exc:
+        _log_failure(
+            logger,
+            "SAPHive SAP cleanup failed",
+            run_id=run_id,
+            error=exc,
+            outputs=outputs,
+        )
+        return exc
+    except Exception as exc:
+        error = ScriptExecutionError(f"SAPHive SAP cleanup failed: {exc}")
+        _log_failure(
+            logger,
+            "SAPHive SAP cleanup crashed",
+            run_id=run_id,
+            error=exc,
+            outputs=outputs,
+        )
+        return error
+
+    logger.info(
+        "SAPHive SAP cleanup succeeded",
+        extra={"run_id": run_id, "sap_cleanup": cleanup_mode.value},
+    )
     return None
 
 

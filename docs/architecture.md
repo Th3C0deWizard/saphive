@@ -14,8 +14,10 @@ Implemented runtime behavior:
 - `saphive run <path>` runs a script file or package by explicit path.
 - `validate(ctx)` runs before SAP connection resolution.
 - `run(ctx)` receives connection-scoped `ctx.sap` after Core resolves the SAP connection.
+- Optional `cleanup(ctx)` runs after `run(ctx)` for script-owned resource cleanup.
 - SAP connection modes are `auto`, `attach`, and `open`.
 - `auto` attaches first, then opens the configured SAP Logon connection when attach is not available.
+- SAP cleanup defaults to closing sessions created through `ctx.sap.create_session()`.
 - Auth uses `.saphive.auth.toml` with `password_env` or `password_prompt`.
 - Local auth files, logs, caches, and build artifacts are excluded from version control and source distributions.
 
@@ -221,6 +223,9 @@ def validate(ctx: SapContext) -> None:
 
 def run(ctx: SapContext) -> None:
     pass
+
+def cleanup(ctx: SapContext) -> None:
+    pass
 ```
 
 Optional future metadata:
@@ -246,9 +251,11 @@ The first implementation should keep the script contract simple and stable.
 6. Run script validate(ctx).
 7. Establish or reuse a SAP session.
 8. Run script run(ctx).
-9. Capture the result.
-10. Log the outcome.
-11. Return a structured execution result.
+9. Run optional script cleanup(ctx).
+10. Apply configured SAP cleanup policy.
+11. Capture the result.
+12. Log the outcome.
+13. Return a structured execution result.
 ```
 
 This flow should be the same regardless of whether execution comes from Python code, the CLI, Windows Task Scheduler, Prefect, Airflow, a future REST API, or a future worker service.
@@ -353,6 +360,10 @@ def run(ctx: SapContext) -> None:
 
 Core should support these flows without forcing one global runtime-owned SAP session. The connection is runtime-owned; sessions are script-managed.
 
+Scripts may define `cleanup(ctx)` for script-owned resources such as downloaded files,
+workbooks, or custom COM objects. SAPHive always runs `cleanup(ctx)` after `run(ctx)`, including
+when `run(ctx)` fails. SAPHive then applies its SAP cleanup policy.
+
 ## SAP Connection Resolution
 
 SAPHive should keep connection selection simple. The runtime should support three connection modes:
@@ -371,6 +382,8 @@ The connection profile should live in `saphive.toml` because it is runtime confi
 [sap]
 mode = "auto"
 connection = "prd"
+cleanup = "created-sessions"
+cleanup_force = false
 
 [sap.connections.prd]
 sap_logon_name = "PRD"
@@ -395,6 +408,11 @@ ctx.sap.list_sessions()
 ctx.sap.attach_session(index=0)
 ctx.sap.create_session()
 ctx.sap.active_session()
+ctx.sap.with_connection(callback)
+ctx.sap.safe_execute(callback)
+ctx.sap.close_created_sessions()
+ctx.sap.close_connection(force=False)
+ctx.sap.close_application()
 ```
 
 MVP connection resolution timing:
@@ -407,10 +425,24 @@ MVP connection resolution timing:
 5. If validation succeeds, resolve SAP connection using auto, attach, or open mode.
 6. Build or update runtime context with connection-scoped ctx.sap.
 7. Run script run(ctx).
-8. Return structured execution result and logs.
+8. Run optional script cleanup(ctx).
+9. Apply SAP cleanup policy.
+10. Return structured execution result and logs.
 ```
 
 This avoids opening SAP GUI when script input validation fails.
+
+Cleanup policies are:
+
+| Policy | Behavior |
+| --- | --- |
+| `none` | Do not close SAP resources automatically. |
+| `created-sessions` | Close sessions created through `ctx.sap.create_session()` during the run. This is the default. |
+| `connection` | Close the selected connection only if SAPHive opened it, unless forced. |
+| `application` | Close the SAP GUI application explicitly. |
+
+CLI `--sap-cleanup-force` allows connection cleanup for attached/pre-existing connections and
+should be used deliberately.
 
 Exact mode behavior:
 

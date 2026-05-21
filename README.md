@@ -84,6 +84,19 @@ username = "MY_SAP_USER"
 password_env = "SAPHIVE_PRD_PASSWORD"
 ```
 
+## SAP Cleanup
+
+By default, SAPHive closes SAP sessions created through `ctx.sap.create_session()` after a run.
+Use `--sap-cleanup` to change the policy:
+
+```bash
+./venv/Scripts/python.exe -m saphive run notificar.py --sap-cleanup none
+./venv/Scripts/python.exe -m saphive run notificar.py --sap-cleanup connection
+```
+
+Connection cleanup only closes connections opened by SAPHive. Add `--sap-cleanup-force` to close
+an attached/pre-existing connection intentionally.
+
 ## Script Contract
 
 ```python
@@ -98,6 +111,11 @@ def validate(ctx: SapContext) -> None:
 def run(ctx: SapContext) -> None:
     session = ctx.sap.create_session()
     ctx.set_output("connection", ctx.sap.connection_name)
+
+def cleanup(ctx: SapContext) -> None:
+    pass
 ```
 
 Scripts should not choose or open SAP connections directly. Core/CLI selects the connection, and scripts manage sessions only through `ctx.sap`.
+When a script needs a raw SAP GUI connection COM operation, use `ctx.sap.with_connection(...)` so SAPHive can apply its COM recovery handling around the callback.
+Use `ctx.sap.safe_execute(...)` for other SAP-related COM code that should retry if another library uninitialized COM mid-script.

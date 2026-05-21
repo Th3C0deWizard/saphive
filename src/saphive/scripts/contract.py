@@ -22,6 +22,7 @@ class ScriptContract:
     metadata: ScriptMetadata
     validate: ScriptFunction
     run: ScriptFunction
+    cleanup: ScriptFunction | None = None
 
 
 def validate_script_contract(
@@ -34,9 +35,12 @@ def validate_script_contract(
     description = _required_non_empty_string(module, "DESCRIPTION")
     validate_function = _required_function(module, "validate")
     run_function = _required_function(module, "run")
+    cleanup_function = _optional_function(module, "cleanup")
 
     _validate_script_function_signature(validate_function, "validate", module)
     _validate_script_function_signature(run_function, "run", module)
+    if cleanup_function is not None:
+        _validate_script_function_signature(cleanup_function, "cleanup", module)
 
     return ScriptContract(
         metadata=ScriptMetadata(
@@ -49,6 +53,7 @@ def validate_script_contract(
         ),
         validate=cast(ScriptFunction, validate_function),
         run=cast(ScriptFunction, run_function),
+        cleanup=None if cleanup_function is None else cast(ScriptFunction, cleanup_function),
     )
 
 
@@ -112,6 +117,23 @@ def _required_function(module: ModuleType, function_name: str) -> Callable[..., 
     if not callable(value):
         raise ScriptContractError(
             f"SAPHive script requires a callable {function_name}(ctx) function.",
+            details={"module": module.__name__, "function": function_name},
+        )
+
+    return cast(Callable[..., object], value)
+
+
+def _optional_function(
+    module: ModuleType,
+    function_name: str,
+) -> Callable[..., object] | None:
+    value = getattr(module, function_name, None)
+    if value is None:
+        return None
+
+    if not callable(value):
+        raise ScriptContractError(
+            f"Optional SAPHive script function {function_name}(ctx) must be callable.",
             details={"module": module.__name__, "function": function_name},
         )
 

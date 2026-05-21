@@ -1,4 +1,5 @@
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -155,6 +156,124 @@ def test_windows_client_selects_connection_and_session() -> None:
     assert session.elements["wnd[0]/tbar[0]/btn[11]"].pressed is True
 
 
+def test_windows_connection_normal_operation_does_not_initialize_com(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeComSession()
+    com_connection = FakeConnection(description="PRD", sessions=[session])
+    application = FakeApplication(connections=[com_connection])
+
+    def dispatch(name: str) -> FakeSapGui:
+        assert name == "SAPGUI"
+        return FakeSapGui(application=application)
+
+    def fail_import_module(name: str) -> object:
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr("saphive.sap.windows.import_module", fail_import_module)
+    sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).attach_connection(
+        "prd",
+        SapConnectionProfile(sap_logon_name="PRD"),
+    )
+
+    assert sap_connection.with_connection(lambda connection: connection.Description) == "PRD"
+    assert isinstance(sap_connection.create_session(), WindowsSapSession)
+
+
+def test_windows_connection_lazily_initializes_com_after_uninitialize(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    initialized = False
+    session = FakeComSession()
+    com_connection = CoInitializeRequiredConnection(
+        description="PRD",
+        sessions=[session],
+        initialized=lambda: initialized,
+    )
+    application = FakeApplication(connections=[com_connection])
+
+    def dispatch(name: str) -> FakeSapGui:
+        assert name == "SAPGUI"
+        return FakeSapGui(application=application)
+
+    def co_initialize() -> None:
+        nonlocal initialized
+        initialized = True
+        events.append("init")
+
+    def co_uninitialize() -> None:
+        nonlocal initialized
+        initialized = False
+        events.append("uninit")
+
+    def fake_import_module(name: str) -> object:
+        assert name == "pythoncom"
+        return SimpleNamespace(CoInitialize=co_initialize, CoUninitialize=co_uninitialize)
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr("saphive.sap.windows.import_module", fake_import_module)
+    sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).attach_connection(
+        "prd",
+        SapConnectionProfile(sap_logon_name="PRD"),
+    )
+
+    assert isinstance(sap_connection.create_session(), WindowsSapSession)
+    assert session.created_sessions == 1
+    assert events == ["init", "uninit"]
+
+
+def test_windows_connection_refreshes_stale_com_proxy_before_creating_session() -> None:
+    stale_connection = StaleConnection(description="PRD")
+    fresh_session = FakeComSession()
+    fresh_connection = FakeConnection(description="PRD", sessions=[fresh_session])
+    applications = [
+        FakeApplication(connections=[stale_connection]),
+        FakeApplication(connections=[fresh_connection]),
+    ]
+
+    def dispatch(name: str) -> FakeSapGui:
+        assert name == "SAPGUI"
+        return FakeSapGui(application=applications.pop(0))
+
+    sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).attach_connection(
+        "prd",
+        SapConnectionProfile(sap_logon_name="PRD"),
+    )
+
+    wrapped_session = sap_connection.create_session()
+
+    assert isinstance(wrapped_session, WindowsSapSession)
+    assert fresh_session.created_sessions == 1
+    assert applications == []
+
+
+def test_windows_connection_refreshes_disconnected_com_proxy_before_creating_session() -> None:
+    disconnected_connection = DisconnectedConnection(description="PRD")
+    fresh_session = FakeComSession()
+    fresh_connection = FakeConnection(description="PRD", sessions=[fresh_session])
+    applications = [
+        FakeApplication(connections=[disconnected_connection]),
+        FakeApplication(connections=[fresh_connection]),
+    ]
+
+    def dispatch(name: str) -> FakeSapGui:
+        assert name == "SAPGUI"
+        return FakeSapGui(application=applications.pop(0))
+
+    sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).attach_connection(
+        "prd",
+        SapConnectionProfile(sap_logon_name="PRD"),
+    )
+
+    wrapped_session = sap_connection.create_session()
+
+    assert isinstance(wrapped_session, WindowsSapSession)
+    assert fresh_session.created_sessions == 1
+    assert applications == []
+
+
 def test_windows_client_raises_when_connection_name_is_missing() -> None:
     application = FakeApplication(connections=[FakeConnection(description="QAS", sessions=[])])
 
@@ -185,7 +304,7 @@ class FakeSapGui:
 
 
 class FakeApplication:
-    def __init__(self, connections: list["FakeConnection"]) -> None:
+    def __init__(self, connections: list[Any]) -> None:
         self.Children = FakeChildren(connections)
 
 
@@ -193,6 +312,49 @@ class FakeConnection:
     def __init__(self, description: str, sessions: list["FakeComSession"]) -> None:
         self.Description = description
         self.Children = FakeChildren(sessions)
+
+
+class StaleConnection:
+    def __init__(self, description: str) -> None:
+        self.Description = description
+
+    def __getattr__(self, name: str) -> object:
+        if name == "Children":
+            raise AttributeError("<unknown>.Children")
+
+        raise AttributeError(name)
+
+
+class DisconnectedConnection:
+    def __init__(self, description: str) -> None:
+        self.Description = description
+
+    def __getattr__(self, name: str) -> object:
+        if name == "Children":
+            raise RuntimeError("(-2147220995, 'El objeto no está conectado al servidor')")
+
+        raise AttributeError(name)
+
+
+class CoInitializeRequiredConnection:
+    def __init__(
+        self,
+        description: str,
+        sessions: list["FakeComSession"],
+        initialized: Callable[[], bool],
+    ) -> None:
+        self.Description = description
+        self._children = FakeChildren(sessions)
+        self._initialized = initialized
+
+    def __getattr__(self, name: str) -> object:
+        if name != "Children":
+            raise AttributeError(name)
+
+        if not self._initialized():
+            raise RuntimeError("No se ha llamado a CoInitialize.")
+
+        return self._children
 
 
 class FakeChildren:
@@ -208,11 +370,16 @@ class FakeComSession:
     def __init__(self) -> None:
         self.elements: dict[str, FakeElement] = {}
         self.started_transactions: list[str] = []
+        self.created_sessions = 0
         self.__dict__["StartTransaction"] = self._start_transaction
         self.__dict__["findById"] = self._find_by_id
+        self.__dict__["CreateSession"] = self._create_session
 
     def _start_transaction(self, transaction_code: str) -> None:
         self.started_transactions.append(transaction_code)
+
+    def _create_session(self) -> None:
+        self.created_sessions += 1
 
     def _find_by_id(self, element_id: str) -> "FakeElement":
         element = self.elements.get(element_id)

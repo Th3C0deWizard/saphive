@@ -1,10 +1,14 @@
 """In-memory SAP GUI test doubles for SAPHive unit tests."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any, TypeVar
 
 from saphive.core.config import SapConnectionMode, SAPHiveConfig
 from saphive.core.errors import SapConnectionError
 from saphive.sap.interfaces import SapConnection, SapSession
+
+T = TypeVar("T")
 
 
 @dataclass(slots=True)
@@ -41,6 +45,9 @@ class InMemorySapConnection:
     connection_name: str = "test"
     session: InMemorySapSession = field(default_factory=InMemorySapSession)
     created_sessions: list[InMemorySapSession] = field(default_factory=list)
+    closed_created_sessions: list[InMemorySapSession] = field(default_factory=list)
+    cleanup_operations: list[str] = field(default_factory=list)
+    opened_by_saphive: bool = True
 
     def list_sessions(self) -> tuple[SapSession, ...]:
         return (self.session, *self.created_sessions)
@@ -55,6 +62,24 @@ class InMemorySapConnection:
 
     def active_session(self) -> SapSession:
         return self.session
+
+    def with_connection(self, callback: Callable[[Any], T]) -> T:
+        return callback(self)
+
+    def safe_execute(self, callback: Callable[[], T]) -> T:
+        return callback()
+
+    def close_created_sessions(self) -> None:
+        self.cleanup_operations.append("close_created_sessions")
+        self.closed_created_sessions.extend(self.created_sessions)
+        self.created_sessions.clear()
+
+    def close_connection(self, *, force: bool = False) -> None:
+        if self.opened_by_saphive or force:
+            self.cleanup_operations.append("close_connection")
+
+    def close_application(self) -> None:
+        self.cleanup_operations.append("close_application")
 
 @dataclass(slots=True)
 class InMemorySapConnectionResolver:

@@ -34,6 +34,20 @@ def test_validate_script_contract_returns_contract_and_metadata() -> None:
     assert contract.metadata.version == "0.1.0"
     assert contract.metadata.author == "Maintenance Team"
     assert contract.metadata.tags == ("maintenance", "notifications")
+    assert contract.cleanup is None
+
+
+def test_validate_script_contract_accepts_optional_cleanup() -> None:
+    module = _valid_script_module()
+
+    def cleanup(ctx: SapContext) -> None:
+        return None
+
+    module.__dict__["cleanup"] = cleanup
+
+    contract = validate_script_contract(module)
+
+    assert contract.cleanup is cleanup
 
 
 def test_extract_script_metadata_returns_only_metadata() -> None:
@@ -90,6 +104,18 @@ def test_contract_rejects_functions_without_ctx(function_name: str) -> None:
         return None
 
     setattr(module, function_name, invalid_function)
+
+    with pytest.raises(ScriptContractError, match="exactly one ctx"):
+        validate_script_contract(module)
+
+
+def test_contract_rejects_invalid_cleanup_signature() -> None:
+    module = _valid_script_module()
+
+    def cleanup() -> None:
+        return None
+
+    module.__dict__["cleanup"] = cleanup
 
     with pytest.raises(ScriptContractError, match="exactly one ctx"):
         validate_script_contract(module)

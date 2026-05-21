@@ -2,6 +2,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+from saphive import SapCleanupMode
 from saphive.cli.app import VALIDATION_FAILED_EXIT_CODE, _load_cli_config, app
 
 runner = CliRunner()
@@ -119,6 +120,25 @@ default_timeout_seconds = 120
 
     assert result.exit_code == 0
     assert "output.timeout: 120" in result.output
+
+
+def test_cli_run_accepts_sap_cleanup_options(tmp_path: Path) -> None:
+    script_path = tmp_path / "cleanup_options.py"
+    _write_script(script_path, "cleanup_options", run_body='ctx.set_output("ran", True)')
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            str(script_path),
+            "--sap-cleanup",
+            SapCleanupMode.NONE.value,
+            "--sap-cleanup-force",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "status: success" in result.output
 
 
 def test_cli_config_file_flag_overrides_script_directory_config(tmp_path: Path) -> None:

@@ -1,5 +1,9 @@
+from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, TypeVar
 
+import pytest
 from tests.support.sap import (
     InMemorySapConnection,
     InMemorySapConnectionResolver,
@@ -10,12 +14,15 @@ from saphive import (
     ExecutionStatus,
     LoggingConfig,
     PathsConfig,
+    SapCleanupMode,
     SapConfig,
     SapConnectionMode,
     SapConnectionProfile,
     SAPHiveConfig,
     SapRuntime,
 )
+
+T = TypeVar("T")
 
 
 def test_runtime_validate_script_runs_validate_only(tmp_path: Path) -> None:
@@ -199,7 +206,131 @@ def test_runtime_resolves_sap_after_validation_for_run(tmp_path: Path) -> None:
     assert result.status is ExecutionStatus.SUCCESS
     assert result.outputs == {"validated": True, "connection": "prd"}
     assert resolver.resolved_modes == [SapConnectionMode.AUTO]
-    assert resolver.connection.created_sessions[0].operations == [("start_transaction", "IW21")]
+    assert resolver.connection.closed_created_sessions[0].operations == [
+        ("start_transaction", "IW21")
+    ]
+    assert resolver.connection.cleanup_operations == ["close_created_sessions"]
+
+
+def test_runtime_runs_script_cleanup_after_success(tmp_path: Path) -> None:
+    script_path = tmp_path / "cleanup_success.py"
+    _write_script(
+        script_path,
+        "cleanup_success",
+        validate_body='ctx.set_output("validated", True)',
+        run_body='ctx.set_output("ran", True)',
+        cleanup_body='ctx.set_output("cleaned", True)',
+    )
+
+    result = SapRuntime().run_script(script_path)
+
+    assert result.status is ExecutionStatus.SUCCESS
+    assert result.outputs == {"validated": True, "ran": True, "cleaned": True}
+
+
+def test_runtime_runs_script_cleanup_after_failure(tmp_path: Path) -> None:
+    script_path = tmp_path / "cleanup_after_failure.py"
+    _write_script(
+        script_path,
+        "cleanup_after_failure",
+        validate_body='ctx.set_output("validated", True)',
+        run_body='raise RuntimeError("boom")',
+        cleanup_body='ctx.set_output("cleaned", True)',
+    )
+
+    result = SapRuntime().run_script(script_path)
+
+    assert result.status is ExecutionStatus.FAILED
+    assert result.error == "boom"
+    assert result.outputs == {"validated": True, "cleaned": True}
+
+
+def test_runtime_fails_when_cleanup_fails_after_success(tmp_path: Path) -> None:
+    script_path = tmp_path / "cleanup_failure.py"
+    _write_script(
+        script_path,
+        "cleanup_failure",
+        validate_body='ctx.set_output("validated", True)',
+        run_body='ctx.set_output("ran", True)',
+        cleanup_body='raise RuntimeError("cleanup boom")',
+    )
+
+    result = SapRuntime().run_script(script_path)
+
+    assert result.status is ExecutionStatus.FAILED
+    assert result.error == "SAPHive script cleanup failed: cleanup boom"
+    assert result.outputs == {"validated": True, "ran": True}
+
+
+def test_runtime_connection_cleanup_respects_force_flag(tmp_path: Path) -> None:
+    script_path = tmp_path / "connection_cleanup.py"
+    _write_script(
+        script_path,
+        "connection_cleanup",
+        validate_body='ctx.set_output("validated", True)',
+        run_body='ctx.sap.active_session()',
+    )
+    connection = InMemorySapConnection(opened_by_saphive=False)
+    runtime = SapRuntime(
+        config=_sap_config(),
+        sap_cleanup=SapCleanupMode.CONNECTION,
+        sap=connection,
+    )
+
+    result = runtime.run_script(script_path)
+
+    assert result.status is ExecutionStatus.SUCCESS
+    assert connection.cleanup_operations == []
+
+    forced_runtime = SapRuntime(
+        config=_sap_config(),
+        sap_cleanup=SapCleanupMode.CONNECTION,
+        sap_cleanup_force=True,
+        sap=connection,
+    )
+    forced_result = forced_runtime.run_script(script_path)
+
+    assert forced_result.status is ExecutionStatus.SUCCESS
+    assert connection.cleanup_operations == ["close_connection"]
+
+
+def test_runtime_keeps_com_initialized_while_sap_script_runs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script_path = tmp_path / "com_guarded_sap.py"
+    _write_script(
+        script_path,
+        "com_guarded_sap",
+        validate_body='ctx.set_output("validated", True)',
+        run_body=(
+            'ctx.set_output("events_before_sap", tuple(ctx.sap.events))\n'
+            '    ctx.sap.active_session()\n'
+            '    ctx.set_output("events_after_sap", tuple(ctx.sap.events))'
+        ),
+    )
+    events: list[str] = []
+
+    def fake_import_module(name: str) -> object:
+        assert name == "pythoncom"
+        return SimpleNamespace(
+            CoInitialize=lambda: events.append("init"),
+            CoUninitialize=lambda: events.append("uninit"),
+        )
+
+    monkeypatch.setattr("saphive.sap.windows.sys.platform", "win32")
+    monkeypatch.setattr("saphive.sap.windows.import_module", fake_import_module)
+    runtime = SapRuntime(
+        config=_sap_config(),
+        connection_resolver=EventRecordingSapResolver(events),
+    )
+
+    result = runtime.run_script(script_path)
+
+    assert result.status is ExecutionStatus.SUCCESS
+    assert result.outputs["events_before_sap"] == ("init", "resolve")
+    assert result.outputs["events_after_sap"] == ("init", "resolve", "sap")
+    assert events == ["init", "resolve", "sap", "close_created_sessions", "uninit"]
 
 
 def test_runtime_includes_log_path_in_result(tmp_path: Path) -> None:
@@ -271,8 +402,10 @@ def _write_script(
     *,
     validate_body: str,
     run_body: str,
+    cleanup_body: str | None = None,
     imports: str = "",
 ) -> None:
+    cleanup_source = "" if cleanup_body is None else f"\ndef cleanup(ctx):\n    {cleanup_body}\n"
     path.write_text(
         f'''
 {imports}
@@ -285,6 +418,7 @@ def validate(ctx):
 
 def run(ctx):
     {run_body}
+{cleanup_source}
 '''.strip(),
         encoding="utf-8",
     )
@@ -298,3 +432,62 @@ def _sap_config() -> SAPHiveConfig:
             connections={"prd": SapConnectionProfile(sap_logon_name="PRD", client="100")},
         )
     )
+
+
+class EventRecordingSapResolver:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+
+    def resolve_connection(
+        self,
+        *,
+        config: SAPHiveConfig,
+        mode: SapConnectionMode | None = None,
+        connection_name: str | None = None,
+        auth_file: str | None = None,
+        config_path: str | None = None,
+        script_path: str | None = None,
+    ) -> "EventRecordingSapConnection":
+        self.events.append("resolve")
+        return EventRecordingSapConnection(self.events)
+
+
+class EventRecordingSapConnection:
+    def __init__(self, events: list[str]) -> None:
+        self.events = events
+        self.session = InMemorySapSession()
+
+    @property
+    def connection_name(self) -> str:
+        return "prd"
+
+    def list_sessions(self) -> tuple[InMemorySapSession, ...]:
+        self.events.append("sap")
+        return (self.session,)
+
+    def attach_session(self, index: int = 0) -> InMemorySapSession:
+        self.events.append("sap")
+        return self.session
+
+    def create_session(self) -> InMemorySapSession:
+        self.events.append("sap")
+        return self.session
+
+    def active_session(self) -> InMemorySapSession:
+        self.events.append("sap")
+        return self.session
+
+    def with_connection(self, callback: Callable[[Any], T]) -> T:
+        return callback(self)
+
+    def safe_execute(self, callback: Callable[[], T]) -> T:
+        return callback()
+
+    def close_created_sessions(self) -> None:
+        self.events.append("close_created_sessions")
+
+    def close_connection(self, *, force: bool = False) -> None:
+        self.events.append("close_connection")
+
+    def close_application(self) -> None:
+        self.events.append("close_application")

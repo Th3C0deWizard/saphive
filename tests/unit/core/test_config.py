@@ -5,6 +5,7 @@ import pytest
 from saphive import (
     ConfigurationError,
     LoggingConfig,
+    SapCleanupMode,
     SapConfig,
     SapConnectionMode,
     SapConnectionProfile,
@@ -28,6 +29,8 @@ def test_config_defaults_are_safe_for_wsl_unit_tests() -> None:
     assert config.logging.directory == Path("logs")
     assert config.sap.mode is SapConnectionMode.AUTO
     assert config.sap.connection is None
+    assert config.sap.cleanup is SapCleanupMode.CREATED_SESSIONS
+    assert config.sap.cleanup_force is False
     assert config.sap.connections == {}
 
 
@@ -64,6 +67,8 @@ jsonl_enabled = true
 [sap]
 mode = "open"
 connection = "prd"
+cleanup = "connection"
+cleanup_force = true
 
 [sap.connections.prd]
 sap_logon_name = "PRD"
@@ -85,6 +90,8 @@ language = "en"
     assert config.logging.jsonl_enabled is True
     assert config.sap.mode is SapConnectionMode.OPEN
     assert config.sap.connection == "prd"
+    assert config.sap.cleanup is SapCleanupMode.CONNECTION
+    assert config.sap.cleanup_force is True
     assert config.sap.connections["prd"].sap_logon_name == "PRD"
     assert config.sap.connections["prd"].client == "100"
     assert config.sap.connections["prd"].language == "EN"
