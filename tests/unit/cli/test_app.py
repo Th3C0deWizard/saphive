@@ -83,6 +83,7 @@ def test_cli_scripts_run_calls_core_runtime(tmp_path: Path) -> None:
     result = runner.invoke(app, ["scripts", "run", "run_me", "--config", str(config_path)])
 
     assert result.exit_code == 0
+    assert "run_id:" in result.output
     assert "status: success" in result.output
     assert "output.validated: True" in result.output
     assert "output.ran: True" in result.output
@@ -95,6 +96,7 @@ def test_cli_root_run_accepts_explicit_script_path(tmp_path: Path) -> None:
     result = runner.invoke(app, ["run", str(script_path)])
 
     assert result.exit_code == 0
+    assert "run_id:" in result.output
     assert "script: path_script" in result.output
     assert "output.ran_from_path: True" in result.output
 

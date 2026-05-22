@@ -12,6 +12,38 @@ class SAPHiveError(Exception):
         self.details = dict(details or {})
 
 
+class AutomationError(SAPHiveError):
+    """Base class for automation execution errors."""
+
+
+class FatalAutomationError(AutomationError):
+    """Raised when the automation run must stop safely."""
+
+
+class InfrastructureError(FatalAutomationError):
+    """Raised when an external runtime dependency is unavailable or corrupted."""
+
+
+class ComRuntimeError(InfrastructureError):
+    """Raised when Windows COM cannot be used safely."""
+
+
+class SapInfrastructureError(InfrastructureError):
+    """Raised when SAP GUI, its connection, or its session is unusable."""
+
+
+class ExcelInfrastructureError(InfrastructureError):
+    """Raised when Excel, a workbook, or PowerQuery is unavailable."""
+
+
+class BusinessAutomationError(AutomationError):
+    """Raised for recoverable business-level automation failures."""
+
+
+class SAPAutomationError(BusinessAutomationError):
+    """Raised for recoverable SAP business validation failures."""
+
+
 class ConfigurationError(SAPHiveError):
     """Raised when SAPHive configuration is missing or invalid."""
 
@@ -32,15 +64,15 @@ class ScriptValidationError(SAPHiveError):
     """Raised when automation script input validation fails."""
 
 
-class SapConnectionError(SAPHiveError):
+class SapConnectionError(SapInfrastructureError):
     """Raised when SAPHive cannot connect to SAP GUI."""
 
 
-class SapSessionError(SAPHiveError):
+class SapSessionError(SapInfrastructureError):
     """Raised when SAPHive cannot access or manage a SAP GUI session."""
 
 
-class SapGuiError(SAPHiveError):
+class SapGuiError(SapInfrastructureError):
     """Raised when SAP GUI Scripting reports an operation failure."""
 
 

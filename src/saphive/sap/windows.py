@@ -10,6 +10,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, TypeVar
 
+from saphive.core.com import ComRuntime
 from saphive.core.errors import SapConnectionError, SapGuiError, SapSessionError
 from saphive.sap.auth import SapCredentials
 
@@ -26,10 +27,10 @@ SAP_LOGON_EXECUTABLE_CANDIDATES = (
 
 
 @contextmanager
-def sap_com_initialized() -> Iterator[None]:
+def sap_com_initialized() -> Iterator[ComRuntime]:
     """Keep COM initialized on the current thread for SAP GUI automation."""
     if sys.platform != "win32":
-        yield
+        yield ComRuntime(enabled=False)
         return
 
     try:
@@ -49,7 +50,7 @@ def sap_com_initialized() -> Iterator[None]:
         ) from exc
 
     try:
-        yield
+        yield ComRuntime(enabled=True)
     finally:
         with suppress(Exception):
             pythoncom.CoUninitialize()
@@ -140,12 +141,13 @@ class WindowsSapConnection:
     profile: Any = field(default=None, repr=False, compare=False)
     opened_by_saphive: bool = False
     created_sessions: list["WindowsSapSession"] = field(default_factory=list, repr=False)
+    managed_sessions: list["WindowsSapSession"] = field(default_factory=list, repr=False)
 
     def list_sessions(self) -> tuple["WindowsSapSession", ...]:
         try:
             return self.with_connection(
                 lambda connection: tuple(
-                    WindowsSapSession(session=connection.Children(index))
+                    self._wrap_session(connection.Children(index), index)
                     for index in range(int(connection.Children.Count))
                 )
             )
@@ -158,7 +160,7 @@ class WindowsSapConnection:
     def attach_session(self, index: int = 0) -> "WindowsSapSession":
         try:
             return self.with_connection(
-                lambda connection: WindowsSapSession(session=connection.Children(index))
+                lambda connection: self._wrap_session(connection.Children(index), index)
             )
         except Exception as exc:
             raise SapSessionError(
@@ -199,9 +201,17 @@ class WindowsSapConnection:
         connection.Children(0).CreateSession()
         after_count = int(connection.Children.Count)
         session_index = after_count - 1 if after_count > before_count else max(0, after_count - 1)
-        session = WindowsSapSession(session=connection.Children(session_index))
+        session = self._wrap_session(connection.Children(session_index), session_index)
         self.created_sessions.append(session)
         return session
+
+    def recover_context_after_external_com(self) -> None:
+        """Refresh connection and session COM proxies after another COM owner ran."""
+        if self._can_refresh_connection():
+            self._refresh_connection()
+
+        for session in tuple(self.managed_sessions):
+            session.refresh_from_connection()
 
     def safe_execute(self, callback: Callable[[], T]) -> T:
         try:
@@ -267,12 +277,38 @@ class WindowsSapConnection:
         connection = _select_connection(application, self.profile)
         object.__setattr__(self, "connection", connection)
 
+    def _wrap_session(self, session: Any, session_index: int) -> "WindowsSapSession":
+        wrapped = WindowsSapSession(
+            session=session,
+            connection_owner=self,
+            session_index=session_index,
+        )
+        self.managed_sessions.append(wrapped)
+        return wrapped
 
-@dataclass(frozen=True, slots=True)
+
 class WindowsSapSession:
     """Thin wrapper around a COM SAP GUI Scripting session object."""
 
-    session: Any = field(repr=False)
+    __slots__ = ("_session", "connection_owner", "session_index")
+
+    def __init__(
+        self,
+        session: Any,
+        *,
+        connection_owner: WindowsSapConnection | None = None,
+        session_index: int | None = None,
+    ) -> None:
+        self._session = session
+        self.connection_owner = connection_owner
+        self.session_index = session_index
+
+    @property
+    def session(self) -> Any:
+        if self._session_is_usable(self._session):
+            return self._session
+
+        return self._refresh_session()
 
     def start_transaction(self, transaction_code: str) -> None:
         try:
@@ -328,11 +364,41 @@ class WindowsSapSession:
         try:
             return action()
         except Exception as exc:
+            if _is_stale_com_proxy_error(exc):
+                self._refresh_session()
+                return action()
+
             if not _is_com_not_initialized_error(exc):
                 raise
 
             with sap_com_initialized():
                 return action()
+
+    def _session_is_usable(self, session: Any) -> bool:
+        try:
+            _ = session.findById
+            return True
+        except Exception as exc:
+            if _is_stale_com_proxy_error(exc):
+                return False
+
+            raise
+
+    def _refresh_session(self) -> Any:
+        if self.connection_owner is None or self.session_index is None:
+            raise SapSessionError("SAPHive could not refresh a stale SAP GUI session.")
+
+        return self.refresh_from_connection()
+
+    def refresh_from_connection(self) -> Any:
+        if self.connection_owner is None or self.session_index is None:
+            raise SapSessionError("SAPHive could not refresh a stale SAP GUI session.")
+
+        session = self.connection_owner.with_connection(
+            lambda connection: connection.Children(self.session_index)
+        )
+        self._session = session
+        return session
 
 
 def _load_dispatch_factory(

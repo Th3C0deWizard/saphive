@@ -274,6 +274,52 @@ def test_windows_connection_refreshes_disconnected_com_proxy_before_creating_ses
     assert applications == []
 
 
+def test_windows_session_refreshes_stale_raw_session_proxy() -> None:
+    stale_session = StaleSession()
+    fresh_session = FakeComSession()
+    com_connection = FakeConnection(description="PRD", sessions=[stale_session])
+    application = FakeApplication(connections=[com_connection])
+
+    def dispatch(name: str) -> FakeSapGui:
+        assert name == "SAPGUI"
+        return FakeSapGui(application=application)
+
+    sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).attach_connection(
+        "prd",
+        SapConnectionProfile(sap_logon_name="PRD"),
+    )
+    wrapped_session = sap_connection.attach_session()
+    com_connection.Children._values[0] = fresh_session
+
+    wrapped_session.start_transaction("IW21")
+
+    assert fresh_session.started_transactions == ["IW21"]
+
+
+def test_windows_connection_recovers_sessions_after_external_com() -> None:
+    original_session = FakeComSession()
+    fresh_session = FakeComSession()
+    com_connection = FakeConnection(description="PRD", sessions=[original_session])
+    application = FakeApplication(connections=[com_connection])
+
+    def dispatch(name: str) -> FakeSapGui:
+        assert name == "SAPGUI"
+        return FakeSapGui(application=application)
+
+    sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).attach_connection(
+        "prd",
+        SapConnectionProfile(sap_logon_name="PRD"),
+    )
+    wrapped_session = sap_connection.attach_session()
+    com_connection.Children._values[0] = fresh_session
+
+    sap_connection.recover_context_after_external_com()
+    wrapped_session.start_transaction("IW21")
+
+    assert original_session.started_transactions == []
+    assert fresh_session.started_transactions == ["IW21"]
+
+
 def test_windows_client_raises_when_connection_name_is_missing() -> None:
     application = FakeApplication(connections=[FakeConnection(description="QAS", sessions=[])])
 
@@ -332,6 +378,14 @@ class DisconnectedConnection:
     def __getattr__(self, name: str) -> object:
         if name == "Children":
             raise RuntimeError("(-2147220995, 'El objeto no está conectado al servidor')")
+
+        raise AttributeError(name)
+
+
+class StaleSession:
+    def __getattr__(self, name: str) -> object:
+        if name in {"findById", "StartTransaction", "CloseSession"}:
+            raise AttributeError(f"<unknown>.{name}")
 
         raise AttributeError(name)
 

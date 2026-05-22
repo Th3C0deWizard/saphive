@@ -5,6 +5,7 @@ from logging import Logger, getLogger
 from pathlib import Path
 from uuid import uuid4
 
+from saphive.core.com import ComRuntime
 from saphive.core.config import SAPHiveConfig
 from saphive.core.metadata import ScriptMetadata
 from saphive.sap.interfaces import SapConnection, SapGuiPlaceholder
@@ -30,6 +31,7 @@ class SapContext:
     config: SAPHiveConfig
     logger: Logger
     sap: SapConnection
+    com: ComRuntime
     inputs: dict[str, object] = field(default_factory=dict)
     outputs: dict[str, object] = field(default_factory=dict)
 
@@ -47,6 +49,7 @@ def build_sap_context(
     workdir: str | Path | None = None,
     logger: Logger | None = None,
     sap: SapConnection | None = None,
+    com: ComRuntime | None = None,
 ) -> SapContext:
     """Build a consistent runtime context for validation or execution paths."""
     resolved_config = SAPHiveConfig() if config is None else config
@@ -67,5 +70,6 @@ def build_sap_context(
         config=resolved_config,
         logger=resolved_logger,
         sap=sap or SapGuiPlaceholder(),
+        com=com or ComRuntime(enabled=False),
         inputs=dict(inputs or {}),
     )
