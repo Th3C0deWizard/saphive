@@ -101,6 +101,11 @@ class WindowsSapGuiClient:
             connection = application.OpenConnection(profile.sap_logon_name, True)
             session = _wait_for_connection_child(connection, 0)
             _login(session, profile, credentials)
+            connection = _wait_for_selected_connection(
+                application,
+                profile,
+                require_session=True,
+            )
         except Exception as exc:
             raise SapConnectionError(
                 "SAPHive could not open SAP GUI connection.",
@@ -197,7 +202,12 @@ class WindowsSapConnection:
             raise
 
     def _create_session_without_retry(self, connection: Any) -> "WindowsSapSession":
-        before_count = int(connection.Children.Count)
+        before_count = _connection_session_count(connection)
+        if before_count == 0 and self._can_refresh_connection():
+            self._refresh_connection()
+            connection = self.connection
+            before_count = _connection_session_count(connection)
+
         _wait_for_connection_child(connection, 0).CreateSession()
         after_count = int(connection.Children.Count)
         session_index = after_count - 1 if after_count > before_count else max(0, after_count - 1)
@@ -548,7 +558,38 @@ def _wait_for_connection_child(
     )
 
 
+def _wait_for_selected_connection(
+    application: Any,
+    profile: Any,
+    *,
+    require_session: bool = False,
+    sleep: Sleep | None = None,
+) -> Any:
+    sleep_func = time.sleep if sleep is None else sleep
+    attempts = max(1, int(SAP_GUI_START_TIMEOUT_SECONDS / SAP_GUI_POLL_SECONDS))
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            connection = _select_connection(application, profile)
+            if not require_session or _connection_session_count(connection) > 0:
+                return connection
+        except Exception as exc:
+            last_error = exc
+
+        if attempt < attempts - 1:
+            sleep_func(SAP_GUI_POLL_SECONDS)
+
+    if last_error is not None:
+        raise last_error
+
+    raise SapConnectionError(
+        "SAP GUI connection was found but did not expose any sessions.",
+        details={"sap_logon_name": profile.sap_logon_name, "client": profile.client},
+    )
+
+
 def _select_connection(application: Any, profile: Any) -> Any:
+    matching_connections: list[Any] = []
     try:
         connection_count = int(application.Children.Count)
     except Exception as exc:
@@ -563,7 +604,14 @@ def _select_connection(application: Any, profile: Any) -> Any:
     for index in range(connection_count):
         connection = application.Children(index)
         if _connection_matches(connection, profile):
+            matching_connections.append(connection)
+
+    for connection in matching_connections:
+        if _connection_session_count(connection) > 0:
             return connection
+
+    if matching_connections:
+        return matching_connections[0]
 
     raise SapConnectionError(
         "Requested SAP GUI connection was not found.",
@@ -584,6 +632,13 @@ def _connection_matches(connection: Any, profile: Any) -> bool:
         return True
 
     return bool(str(getattr(connection, "Client", profile.client)) == profile.client)
+
+
+def _connection_session_count(connection: Any) -> int:
+    try:
+        return int(connection.Children.Count)
+    except Exception:
+        return 0
 
 
 def _is_stale_com_proxy_error(error: Exception) -> bool:

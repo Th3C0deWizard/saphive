@@ -241,6 +241,31 @@ def test_windows_connection_waits_for_initial_session_before_create(
     assert sleep_calls == [0.5]
 
 
+def test_windows_connection_refreshes_connection_without_sessions_before_create() -> None:
+    stale_connection = FakeConnection(description="PRD", sessions=[])
+    fresh_session = FakeComSession()
+    fresh_connection = FakeConnection(description="PRD", sessions=[fresh_session])
+    applications = [
+        FakeApplication(connections=[stale_connection]),
+        FakeApplication(connections=[fresh_connection]),
+    ]
+
+    def dispatch(name: str) -> FakeSapGui:
+        assert name == "SAPGUI"
+        return FakeSapGui(application=applications.pop(0))
+
+    sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).attach_connection(
+        "prd",
+        SapConnectionProfile(sap_logon_name="PRD"),
+    )
+
+    wrapped_session = sap_connection.create_session()
+
+    assert isinstance(wrapped_session, WindowsSapSession)
+    assert fresh_session.created_sessions == 1
+    assert applications == []
+
+
 def test_windows_connection_lazily_initializes_com_after_uninitialize(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
