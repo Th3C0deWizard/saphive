@@ -241,6 +241,52 @@ def test_windows_connection_waits_for_initial_session_before_create(
     assert sleep_calls == [0.5]
 
 
+def test_windows_connection_does_not_track_session_when_create_does_not_increase_count() -> None:
+    session = FakeComSession()
+    com_connection = FakeConnection(description="PRD", sessions=[session])
+    application = FakeApplication(connections=[com_connection])
+
+    def dispatch(name: str) -> FakeSapGui:
+        assert name == "SAPGUI"
+        return FakeSapGui(application=application)
+
+    sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).attach_connection(
+        "prd",
+        SapConnectionProfile(sap_logon_name="PRD"),
+    )
+
+    wrapped_session = sap_connection.create_session()
+    sap_connection.close_created_sessions()
+
+    assert wrapped_session.session is session
+    assert session.created_sessions == 1
+    assert session.closed_sessions == 0
+
+
+def test_windows_connection_closes_only_session_created_by_create_session() -> None:
+    com_connection = FakeConnection(description="PRD", sessions=[])
+    initial_session = GrowingComSession(com_connection.Children)
+    com_connection.Children._values.append(initial_session)
+    com_connection.Children.Count = 1
+    application = FakeApplication(connections=[com_connection])
+
+    def dispatch(name: str) -> FakeSapGui:
+        assert name == "SAPGUI"
+        return FakeSapGui(application=application)
+
+    sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).attach_connection(
+        "prd",
+        SapConnectionProfile(sap_logon_name="PRD"),
+    )
+
+    created_session = sap_connection.create_session().session
+    sap_connection.close_created_sessions()
+
+    assert initial_session.created_sessions == 1
+    assert initial_session.closed_sessions == 0
+    assert created_session.closed_sessions == 1
+
+
 def test_windows_connection_refreshes_connection_without_sessions_before_create() -> None:
     stale_connection = FakeConnection(description="PRD", sessions=[])
     fresh_session = FakeComSession()
@@ -433,6 +479,28 @@ def test_windows_session_refreshes_stale_raw_session_proxy() -> None:
     assert fresh_session.started_transactions == ["IW21"]
 
 
+def test_windows_session_refreshes_unavailable_raw_session_proxy() -> None:
+    unavailable_session = UnavailableSession()
+    fresh_session = FakeComSession()
+    com_connection = FakeConnection(description="PRD", sessions=[unavailable_session])
+    application = FakeApplication(connections=[com_connection])
+
+    def dispatch(name: str) -> FakeSapGui:
+        assert name == "SAPGUI"
+        return FakeSapGui(application=application)
+
+    sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).attach_connection(
+        "prd",
+        SapConnectionProfile(sap_logon_name="PRD"),
+    )
+    wrapped_session = sap_connection.attach_session()
+    com_connection.Children._values[0] = fresh_session
+
+    wrapped_session.start_transaction("IW41")
+
+    assert fresh_session.started_transactions == ["IW41"]
+
+
 def test_windows_connection_recovers_sessions_after_external_com() -> None:
     original_session = FakeComSession()
     fresh_session = FakeComSession()
@@ -554,6 +622,18 @@ class StaleSession:
         raise AttributeError(name)
 
 
+class UnavailableSession:
+    def __init__(self) -> None:
+        self.__dict__["findById"] = self._find_by_id
+
+    def _find_by_id(self, element_id: str) -> object:
+        raise RuntimeError(
+            "(-2147418094, 'El destinatario (servidor [no una aplicación de servidor]) "
+            "no está disponible ni presente; las conexiones no son válidas. "
+            "La llamada no se ejecutó.', None, None)"
+        )
+
+
 class CoInitializeRequiredConnection:
     def __init__(
         self,
@@ -604,15 +684,20 @@ class FakeComSession:
         self.elements: dict[str, FakeElement] = {}
         self.started_transactions: list[str] = []
         self.created_sessions = 0
+        self.closed_sessions = 0
         self.__dict__["StartTransaction"] = self._start_transaction
         self.__dict__["findById"] = self._find_by_id
         self.__dict__["CreateSession"] = self._create_session
+        self.__dict__["CloseSession"] = self._close_session
 
     def _start_transaction(self, transaction_code: str) -> None:
         self.started_transactions.append(transaction_code)
 
     def _create_session(self) -> None:
         self.created_sessions += 1
+
+    def _close_session(self) -> None:
+        self.closed_sessions += 1
 
     def _find_by_id(self, element_id: str) -> "FakeElement":
         element = self.elements.get(element_id)
@@ -621,6 +706,17 @@ class FakeComSession:
             self.elements[element_id] = element
 
         return element
+
+
+class GrowingComSession(FakeComSession):
+    def __init__(self, children: FakeChildren) -> None:
+        super().__init__()
+        self.children = children
+
+    def _create_session(self) -> None:
+        super()._create_session()
+        self.children._values.append(FakeComSession())
+        self.children.Count = len(self.children._values)
 
 
 class FailingComSession:

@@ -221,7 +221,10 @@ class WindowsSapConnection:
 
         _wait_for_connection_child(connection, 0).CreateSession()
         after_count = int(connection.Children.Count)
-        session_index = after_count - 1 if after_count > before_count else max(0, after_count - 1)
+        if after_count <= before_count:
+            return self._wrap_session(connection.Children(0), 0)
+
+        session_index = after_count - 1
         session = self._wrap_session(connection.Children(session_index), session_index)
         self.created_sessions.append(session)
         return session
@@ -416,7 +419,7 @@ class WindowsSapSession:
 
     def _session_is_usable(self, session: Any) -> bool:
         try:
-            _ = session.findById
+            session.findById("wnd[0]")
             return True
         except Exception as exc:
             if _is_stale_com_proxy_error(exc):
@@ -682,7 +685,12 @@ def _is_stale_com_proxy_error(error: Exception) -> bool:
         or "objeto invocado se desconect" in normalized_message
         or "objeto no está conectado al servidor" in normalized_message
         or "objeto no esta conectado al servidor" in normalized_message
+        or "destinatario" in normalized_message
+        or "conexiones no son válidas" in normalized_message
+        or "conexiones no son validas" in normalized_message
+        or ("server" in normalized_message and "not available" in normalized_message)
         or "-2147417848" in message
+        or "-2147418094" in message
         or "-2147023174" in message
         or "-2147220995" in message
     )
