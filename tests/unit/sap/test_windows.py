@@ -266,6 +266,31 @@ def test_windows_connection_refreshes_connection_without_sessions_before_create(
     assert applications == []
 
 
+def test_windows_opened_connection_uses_initial_session_when_connection_disappears() -> None:
+    initial_session = FakeComSession()
+    opened_connection = FakeConnection(description="PRD", sessions=[initial_session])
+    applications = [
+        FakeOpenApplication(connections=[opened_connection], opened_connection=opened_connection),
+        FakeApplication(connections=[]),
+    ]
+
+    def dispatch(name: str) -> FakeApplication:
+        assert name == "SAPGUI"
+        return applications.pop(0)
+
+    sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).open_connection(
+        "prd",
+        SapConnectionProfile(sap_logon_name="PRD", client="300", language="ES"),
+        SimpleNamespace(username="INV10018", password="secret"),
+    )
+    opened_connection.Children = FakeChildren([])
+
+    wrapped_session = sap_connection.create_session()
+
+    assert wrapped_session.session is initial_session
+    assert applications == []
+
+
 def test_windows_connection_lazily_initializes_com_after_uninitialize(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -452,6 +477,18 @@ class FakeCallableApplication(FakeApplication):
     def __call__(self) -> object:
         self.called = True
         raise RuntimeError("application object must not be called")
+
+
+class FakeOpenApplication(FakeApplication):
+    def __init__(self, connections: list[Any], opened_connection: "FakeConnection") -> None:
+        super().__init__(connections)
+        self.opened_connection = opened_connection
+        self.OpenConnection = self._open_connection
+
+    def _open_connection(self, name: str, sync: bool) -> "FakeConnection":
+        assert name == "PRD"
+        assert sync is True
+        return self.opened_connection
 
 
 class FakeConnection:

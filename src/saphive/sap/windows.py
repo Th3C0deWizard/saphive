@@ -118,6 +118,7 @@ class WindowsSapGuiClient:
             client=self,
             profile=profile,
             opened_by_saphive=True,
+            initial_session=session,
         )
 
     def _application(self, *, start_sap_logon: bool) -> Any:
@@ -145,6 +146,7 @@ class WindowsSapConnection:
     client: WindowsSapGuiClient | None = field(default=None, repr=False, compare=False)
     profile: Any = field(default=None, repr=False, compare=False)
     opened_by_saphive: bool = False
+    initial_session: Any | None = field(default=None, repr=False, compare=False)
     created_sessions: list["WindowsSapSession"] = field(default_factory=list, repr=False)
     managed_sessions: list["WindowsSapSession"] = field(default_factory=list, repr=False)
 
@@ -204,9 +206,18 @@ class WindowsSapConnection:
     def _create_session_without_retry(self, connection: Any) -> "WindowsSapSession":
         before_count = _connection_session_count(connection)
         if before_count == 0 and self._can_refresh_connection():
-            self._refresh_connection()
+            try:
+                self._refresh_connection()
+            except SapConnectionError:
+                if self.initial_session is not None:
+                    return self._wrap_session(self.initial_session, 0)
+                raise
+
             connection = self.connection
             before_count = _connection_session_count(connection)
+
+        if before_count == 0 and self.initial_session is not None:
+            return self._wrap_session(self.initial_session, 0)
 
         _wait_for_connection_child(connection, 0).CreateSession()
         after_count = int(connection.Children.Count)
