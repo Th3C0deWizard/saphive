@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from typing import Annotated
+from uuid import uuid4
 
 import typer
 
@@ -156,8 +157,10 @@ def run_named_script(
         sap_cleanup=sap_cleanup,
         sap_cleanup_force=sap_cleanup_force,
     )
-    result = runtime.run_script(script_name, inputs=_parse_inputs(inputs))
-    _print_result(result)
+    run_id = uuid4().hex
+    typer.echo(f"run_id: {run_id}")
+    result = runtime.run_script(script_name, inputs=_parse_inputs(inputs), run_id=run_id)
+    _print_result(result, include_run_id=False)
     raise typer.Exit(_exit_code_for_result(result))
 
 
@@ -182,8 +185,10 @@ def run_script_path(
         sap_cleanup=sap_cleanup,
         sap_cleanup_force=sap_cleanup_force,
     )
-    result = runtime.run_script(script_path, inputs=_parse_inputs(inputs))
-    _print_result(result)
+    run_id = uuid4().hex
+    typer.echo(f"run_id: {run_id}")
+    result = runtime.run_script(script_path, inputs=_parse_inputs(inputs), run_id=run_id)
+    _print_result(result, include_run_id=False)
     raise typer.Exit(_exit_code_for_result(result))
 
 
@@ -246,9 +251,10 @@ def _parse_inputs(raw_inputs: list[str] | None) -> dict[str, object]:
     return inputs
 
 
-def _print_result(result: ScriptExecutionResult) -> None:
+def _print_result(result: ScriptExecutionResult, *, include_run_id: bool = True) -> None:
     typer.echo(f"script: {result.script_name}")
-    typer.echo(f"run_id: {result.run_id}")
+    if include_run_id:
+        typer.echo(f"run_id: {result.run_id}")
     typer.echo(f"status: {result.status.value}")
     if result.error is not None:
         typer.echo(f"error: {result.error}", err=True)

@@ -1,5 +1,6 @@
 """Core runtime facade for SAPHive."""
 
+import json
 import logging
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
@@ -10,7 +11,15 @@ from uuid import uuid4
 
 from saphive.core.config import SapCleanupMode, SapConnectionMode, SAPHiveConfig
 from saphive.core.context import SapContext, build_sap_context
-from saphive.core.errors import SAPHiveError, ScriptExecutionError, ScriptValidationError
+from saphive.core.errors import (
+    ComRuntimeError,
+    ExcelInfrastructureError,
+    FatalAutomationError,
+    SAPHiveError,
+    SapInfrastructureError,
+    ScriptExecutionError,
+    ScriptValidationError,
+)
 from saphive.core.results import ExecutionStatus, ScriptExecutionResult
 from saphive.sap.interfaces import SapConnection, SapConnectionResolver
 from saphive.sap.resolver import DefaultSapConnectionResolver, normalize_auth_path
@@ -121,7 +130,8 @@ class SapRuntime:
         should_prepare_sap = self.sap is not None or _should_resolve_sap(self)
         sap_scope = sap_com_initialized() if should_prepare_sap else nullcontext()
         try:
-            with sap_scope:
+            with sap_scope as base_com_runtime:
+                context_com_runtime = base_com_runtime
                 if should_prepare_sap:
                     try:
                         sap_connection = self.sap or self.connection_resolver.resolve_connection(
@@ -159,6 +169,9 @@ class SapRuntime:
                             "sap_connection": sap_connection.connection_name,
                         },
                     )
+                    context_com_runtime = base_com_runtime.with_recovery_callback(
+                        lambda: _recover_sap_context(sap_connection)
+                    )
 
                 context = build_sap_context(
                     script=loaded_script.metadata,
@@ -168,6 +181,7 @@ class SapRuntime:
                     workdir=self.workdir,
                     logger=logger,
                     sap=sap_connection,
+                    com=context_com_runtime,
                 )
                 context.outputs.update(validation_context.outputs)
 
@@ -323,6 +337,22 @@ def _run_loaded_script(
             outputs=context.outputs,
             logs_path=logs_path,
         )
+    except FatalAutomationError as exc:
+        _log_failure(
+            logger,
+            "SAPHive script execution stopped by fatal automation error",
+            run_id=context.run_id,
+            error=exc,
+            outputs=context.outputs,
+        )
+        return _failed_result(
+            script_name=context.script.name,
+            run_id=context.run_id,
+            started_at=started_at,
+            error=exc,
+            outputs=context.outputs,
+            logs_path=logs_path,
+        )
     except SAPHiveError as exc:
         _log_failure(
             logger,
@@ -340,18 +370,19 @@ def _run_loaded_script(
             logs_path=logs_path,
         )
     except Exception as exc:
+        error = _classify_unhandled_execution_error(exc)
         _log_failure(
             logger,
             "SAPHive script execution crashed",
             run_id=context.run_id,
-            error=exc,
+            error=error,
             outputs=context.outputs,
         )
         return _failed_result(
             script_name=context.script.name,
             run_id=context.run_id,
             started_at=started_at,
-            error=ScriptExecutionError(str(exc)),
+            error=error,
             outputs=context.outputs,
             logs_path=logs_path,
         )
@@ -439,6 +470,12 @@ def _cleanup_sap_connection(
     return None
 
 
+def _recover_sap_context(sap_connection: SapConnection) -> None:
+    recover = getattr(sap_connection, "recover_context_after_external_com", None)
+    if recover is not None:
+        recover()
+
+
 def _success_result(
     context: SapContext,
     started_at: datetime,
@@ -494,6 +531,71 @@ def _failed_result(
     )
 
 
+def _classify_unhandled_execution_error(error: Exception) -> SAPHiveError:
+    message = str(error)
+    if _looks_like_com_lifecycle_error(error):
+        return ComRuntimeError(
+            "SAPHive detected an invalid Windows COM lifecycle while running the script.",
+            details={"error": message, "error_type": type(error).__name__},
+        )
+
+    if _looks_like_sap_infrastructure_error(error):
+        return SapInfrastructureError(
+            "SAPHive detected an unusable SAP GUI scripting session while running the script.",
+            details={"error": message, "error_type": type(error).__name__},
+        )
+
+    if _looks_like_excel_infrastructure_error(error):
+        return ExcelInfrastructureError(
+            "SAPHive detected an Excel automation failure while running the script.",
+            details={"error": message, "error_type": type(error).__name__},
+        )
+
+    return ScriptExecutionError(message)
+
+
+def _looks_like_com_lifecycle_error(error: Exception) -> bool:
+    message = str(error).lower()
+    return (
+        "coinitialize" in message
+        or "couninitialize" in message
+        or "coinitialize has not been called" in message
+        or "no se ha llamado a coinitialize" in message
+        or "-2147221008" in message
+    )
+
+
+def _looks_like_sap_infrastructure_error(error: Exception) -> bool:
+    message = str(error)
+    normalized = message.lower()
+    return (
+        (isinstance(error, AttributeError) and message.startswith("<unknown>."))
+        or "rpc_e_disconnected" in normalized
+        or "object invoked has disconnected" in normalized
+        or "object is not connected to server" in normalized
+        or "objeto invocado se desconect" in normalized
+        or "objeto no está conectado al servidor" in normalized
+        or "objeto no esta conectado al servidor" in normalized
+        or ("saplogon" in normalized and "enumerator of the collection" in normalized)
+        or ("sap gui" in normalized and "session" in normalized and "invalid" in normalized)
+        or "-2147417848" in message
+        or "-2147023174" in message
+        or "-2147220995" in message
+    )
+
+
+def _looks_like_excel_infrastructure_error(error: Exception) -> bool:
+    module_name = type(error).__module__.lower()
+    message = str(error).lower()
+    return (
+        module_name.startswith("pymacros")
+        or "workbook" in message
+        or "powerquery" in message
+        or "power query" in message
+        or "excel" in message
+    )
+
+
 def _log_failure(
     logger: Logger,
     message: str,
@@ -546,9 +648,71 @@ def _build_run_logger(
     run_logger.handlers.clear()
 
     handler = logging.FileHandler(logs_path, encoding="utf-8")
-    handler.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
-    )
+    if config.logging.jsonl_enabled:
+        handler.setFormatter(JsonLinesFormatter())
+    else:
+        handler.setFormatter(ContextFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
     run_logger.addHandler(handler)
     run_logger.info("Logger initialized", extra={"script": script, "run_id": run_id})
     return run_logger, logs_path
+
+
+class ContextFormatter(logging.Formatter):
+    """Text formatter that appends structured logging fields."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        message = super().format(record)
+        context = _record_context(record)
+        if not context:
+            return message
+
+        rendered_context = " ".join(
+            f"{key}={_format_log_value(value)}" for key, value in sorted(context.items())
+        )
+        return f"{message} {rendered_context}"
+
+
+class JsonLinesFormatter(logging.Formatter):
+    """JSON Lines formatter for structured run logs."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "timestamp": self.formatTime(record),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        payload.update(_record_context(record))
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+
+        return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+_BASE_LOG_RECORD_KEYS = frozenset(
+    logging.LogRecord(
+        name="",
+        level=0,
+        pathname="",
+        lineno=0,
+        msg="",
+        args=(),
+        exc_info=None,
+    ).__dict__
+) | {"message", "asctime"}
+
+
+def _record_context(record: logging.LogRecord) -> dict[str, object]:
+    return {
+        key: value
+        for key, value in record.__dict__.items()
+        if key not in _BASE_LOG_RECORD_KEYS and not key.startswith("_")
+    }
+
+
+def _format_log_value(value: object) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False) if " " in value else value
+    return str(value)

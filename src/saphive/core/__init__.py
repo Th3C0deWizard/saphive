@@ -1,5 +1,6 @@
 """Core runtime package for SAPHive."""
 
+from saphive.core.com import ComRuntime
 from saphive.core.config import (
     LoggingConfig,
     PathsConfig,
@@ -17,10 +18,18 @@ from saphive.core.config import (
 )
 from saphive.core.context import RuntimePaths, SapContext, build_sap_context
 from saphive.core.errors import (
+    AutomationError,
+    BusinessAutomationError,
+    ComRuntimeError,
     ConfigurationError,
+    ExcelInfrastructureError,
+    FatalAutomationError,
+    InfrastructureError,
+    SAPAutomationError,
     SapConnectionError,
     SapGuiError,
     SAPHiveError,
+    SapInfrastructureError,
     SapSessionError,
     ScriptContractError,
     ScriptDiscoveryError,
@@ -34,12 +43,20 @@ from saphive.core.runtime import SapRuntime
 from saphive.sap.interfaces import SapGuiPlaceholder
 
 __all__ = [
+    "AutomationError",
+    "BusinessAutomationError",
+    "ComRuntime",
+    "ComRuntimeError",
     "ConfigurationError",
+    "ExcelInfrastructureError",
     "ExecutionStatus",
+    "FatalAutomationError",
+    "InfrastructureError",
     "LoggingConfig",
     "PathsConfig",
     "RuntimeConfig",
     "RuntimePaths",
+    "SAPAutomationError",
     "SAPHiveConfig",
     "SAPHiveError",
     "SapCleanupMode",
@@ -50,6 +67,7 @@ __all__ = [
     "SapContext",
     "SapGuiError",
     "SapGuiPlaceholder",
+    "SapInfrastructureError",
     "SapRuntime",
     "SapSessionError",
     "ScriptContractError",

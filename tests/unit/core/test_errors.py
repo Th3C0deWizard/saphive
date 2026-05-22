@@ -1,8 +1,16 @@
 from saphive import (
+    AutomationError,
+    BusinessAutomationError,
+    ComRuntimeError,
     ConfigurationError,
+    ExcelInfrastructureError,
+    FatalAutomationError,
+    InfrastructureError,
+    SAPAutomationError,
     SapConnectionError,
     SapGuiError,
     SAPHiveError,
+    SapInfrastructureError,
     SapSessionError,
     ScriptContractError,
     ScriptDiscoveryError,
@@ -22,6 +30,14 @@ def test_saphive_error_stores_message_and_details() -> None:
 
 def test_domain_errors_share_base_type() -> None:
     error_types = [
+        AutomationError,
+        FatalAutomationError,
+        InfrastructureError,
+        ComRuntimeError,
+        SapInfrastructureError,
+        ExcelInfrastructureError,
+        BusinessAutomationError,
+        SAPAutomationError,
         ConfigurationError,
         ScriptDiscoveryError,
         ScriptLoadError,

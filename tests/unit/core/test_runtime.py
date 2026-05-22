@@ -370,7 +370,7 @@ def test_runtime_debug_log_includes_failure_details_and_traceback(tmp_path: Path
     assert result.logs_path is not None
     log_text = result.logs_path.read_text(encoding="utf-8")
     assert "SAPHive script execution crashed debug details" in log_text
-    assert "error_type=builtins.RuntimeError" in log_text
+    assert "error_type=saphive.core.errors.ScriptExecutionError" in log_text
     assert "outputs={'validated': True}" in log_text
     assert "Traceback (most recent call last)" in log_text
     assert 'raise RuntimeError("boom")' in log_text
@@ -394,6 +394,91 @@ def test_runtime_info_log_omits_failure_traceback(tmp_path: Path) -> None:
     log_text = result.logs_path.read_text(encoding="utf-8")
     assert "SAPHive script execution crashed: boom" in log_text
     assert "Traceback (most recent call last)" not in log_text
+
+
+def test_runtime_text_log_includes_extra_context(tmp_path: Path) -> None:
+    script_path = tmp_path / "context_log.py"
+    logs_dir = tmp_path / "logs"
+    _write_script(
+        script_path,
+        "context_log",
+        validate_body='ctx.set_output("validated", True)',
+        run_body='ctx.logger.info("row event", extra={"item_id": "123", "row_index": 4})',
+    )
+    runtime = SapRuntime(config=SAPHiveConfig(logging=LoggingConfig(directory=logs_dir)))
+
+    result = runtime.run_script(script_path, run_id="run-context-log")
+
+    assert result.status is ExecutionStatus.SUCCESS
+    assert result.logs_path is not None
+    log_text = result.logs_path.read_text(encoding="utf-8")
+    assert "row event" in log_text
+    assert "item_id=123" in log_text
+    assert "row_index=4" in log_text
+
+
+def test_runtime_jsonl_log_includes_extra_context(tmp_path: Path) -> None:
+    script_path = tmp_path / "json_log.py"
+    logs_dir = tmp_path / "logs"
+    _write_script(
+        script_path,
+        "json_log",
+        validate_body='ctx.set_output("validated", True)',
+        run_body='ctx.logger.info("row event", extra={"item_id": "123", "row_index": 4})',
+    )
+    runtime = SapRuntime(
+        config=SAPHiveConfig(
+            logging=LoggingConfig(directory=logs_dir, jsonl_enabled=True)
+        )
+    )
+
+    result = runtime.run_script(script_path, run_id="run-json-log")
+
+    assert result.status is ExecutionStatus.SUCCESS
+    assert result.logs_path is not None
+    log_text = result.logs_path.read_text(encoding="utf-8")
+    assert '"message": "row event"' in log_text
+    assert '"item_id": "123"' in log_text
+    assert '"row_index": 4' in log_text
+
+
+def test_runtime_fatal_error_runs_cleanup_and_sap_cleanup(tmp_path: Path) -> None:
+    script_path = tmp_path / "fatal_error.py"
+    _write_script(
+        script_path,
+        "fatal_error",
+        validate_body='ctx.set_output("validated", True)',
+        run_body=(
+            'ctx.sap.create_session()\n'
+            '    raise SapInfrastructureError("SAP session is corrupted")'
+        ),
+        cleanup_body='ctx.set_output("cleaned", True)',
+        imports="from saphive import SapInfrastructureError",
+    )
+    sap_connection = InMemorySapConnection()
+    runtime = SapRuntime(sap=sap_connection)
+
+    result = runtime.run_script(script_path)
+
+    assert result.status is ExecutionStatus.FAILED
+    assert result.error == "SAP session is corrupted"
+    assert result.outputs == {"validated": True, "cleaned": True}
+    assert sap_connection.cleanup_operations == ["close_created_sessions"]
+
+
+def test_runtime_context_exposes_com_guard(tmp_path: Path) -> None:
+    script_path = tmp_path / "com_guard.py"
+    _write_script(
+        script_path,
+        "com_guard",
+        validate_body='ctx.set_output("validated", True)',
+        run_body='ctx.set_output("guarded", ctx.com.run_with_com_guard(lambda: "ok"))',
+    )
+
+    result = SapRuntime().run_script(script_path)
+
+    assert result.status is ExecutionStatus.SUCCESS
+    assert result.outputs == {"validated": True, "guarded": "ok"}
 
 
 def _write_script(
