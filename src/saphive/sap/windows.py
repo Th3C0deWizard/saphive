@@ -99,7 +99,7 @@ class WindowsSapGuiClient:
         application = self._application(start_sap_logon=True)
         try:
             connection = application.OpenConnection(profile.sap_logon_name, True)
-            session = connection.Children(0)
+            session = _wait_for_connection_child(connection, 0)
             _login(session, profile, credentials)
         except Exception as exc:
             raise SapConnectionError(
@@ -121,12 +121,7 @@ class WindowsSapGuiClient:
         )
         try:
             sap_gui = dispatch("SAPGUI")
-            scripting_engine = getattr(sap_gui, "GetScriptingEngine", None)
-            if scripting_engine is None:
-                return sap_gui
-            if callable(scripting_engine):
-                return scripting_engine()
-            return scripting_engine
+            return _resolve_sap_application(sap_gui)
         except SapConnectionError:
             raise
         except Exception as exc:
@@ -203,7 +198,7 @@ class WindowsSapConnection:
 
     def _create_session_without_retry(self, connection: Any) -> "WindowsSapSession":
         before_count = int(connection.Children.Count)
-        connection.Children(0).CreateSession()
+        _wait_for_connection_child(connection, 0).CreateSession()
         after_count = int(connection.Children.Count)
         session_index = after_count - 1 if after_count > before_count else max(0, after_count - 1)
         session = self._wrap_session(connection.Children(session_index), session_index)
@@ -498,6 +493,61 @@ def _retry_get_sap_gui_object(
     return last_error or SapConnectionError("SAP GUI Scripting engine did not become available.")
 
 
+def _resolve_sap_application(sap_gui: Any) -> Any:
+    scripting_engine = getattr(sap_gui, "GetScriptingEngine", None)
+    if scripting_engine is None:
+        return sap_gui
+
+    if _looks_like_sap_application(scripting_engine):
+        return scripting_engine
+
+    if callable(scripting_engine):
+        return scripting_engine()
+
+    return scripting_engine
+
+
+def _looks_like_sap_application(value: Any) -> bool:
+    return _has_com_member(value, "Children") or _has_com_member(value, "OpenConnection")
+
+
+def _has_com_member(value: Any, member: str) -> bool:
+    try:
+        getattr(value, member)
+        return True
+    except Exception:
+        return False
+
+
+def _wait_for_connection_child(
+    connection: Any,
+    index: int,
+    *,
+    sleep: Sleep | None = None,
+) -> Any:
+    sleep_func = time.sleep if sleep is None else sleep
+    attempts = max(1, int(SAP_GUI_START_TIMEOUT_SECONDS / SAP_GUI_POLL_SECONDS))
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return connection.Children(index)
+        except Exception as exc:
+            if not _is_session_index_not_found_error(exc):
+                raise
+
+            last_error = exc
+            if attempt < attempts - 1:
+                sleep_func(SAP_GUI_POLL_SECONDS)
+
+    if last_error is not None:
+        raise last_error
+
+    raise SapSessionError(
+        "SAP GUI connection did not expose the requested session.",
+        details={"session_index": index},
+    )
+
+
 def _select_connection(application: Any, profile: Any) -> Any:
     try:
         connection_count = int(application.Children.Count)
@@ -550,6 +600,15 @@ def _is_stale_com_proxy_error(error: Exception) -> bool:
         or "-2147417848" in message
         or "-2147023174" in message
         or "-2147220995" in message
+    )
+
+
+def _is_session_index_not_found_error(error: Exception) -> bool:
+    message = str(error).lower()
+    return (
+        "specified index" in message
+        or "enumerator of the collection cannot find" in message
+        or "614, 'sapfewse'" in message
     )
 
 

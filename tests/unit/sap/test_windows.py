@@ -173,6 +173,24 @@ def test_windows_client_accepts_callable_scripting_engine() -> None:
     assert sap_connection.with_connection(lambda connection: connection.Description) == "PRD"
 
 
+def test_windows_client_does_not_call_application_like_scripting_engine() -> None:
+    session = FakeComSession()
+    com_connection = FakeConnection(description="PRD", sessions=[session])
+    application = FakeCallableApplication(connections=[com_connection])
+
+    def dispatch(name: str) -> FakeSapGui:
+        assert name == "SAPGUI"
+        return FakeSapGui(application=application)
+
+    sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).attach_connection(
+        "prd",
+        SapConnectionProfile(sap_logon_name="PRD"),
+    )
+
+    assert sap_connection.with_connection(lambda connection: connection.Description) == "PRD"
+    assert application.called is False
+
+
 def test_windows_connection_normal_operation_does_not_initialize_com(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -196,6 +214,31 @@ def test_windows_connection_normal_operation_does_not_initialize_com(
 
     assert sap_connection.with_connection(lambda connection: connection.Description) == "PRD"
     assert isinstance(sap_connection.create_session(), WindowsSapSession)
+
+
+def test_windows_connection_waits_for_initial_session_before_create(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeComSession()
+    com_connection = FakeConnection(description="PRD", sessions=[session])
+    com_connection.Children = DelayedChildren([session], failures=1)
+    application = FakeApplication(connections=[com_connection])
+
+    def dispatch(name: str) -> FakeSapGui:
+        assert name == "SAPGUI"
+        return FakeSapGui(application=application)
+
+    sleep_calls: list[float] = []
+
+    monkeypatch.setattr("saphive.sap.windows.time.sleep", sleep_calls.append)
+    sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).attach_connection(
+        "prd",
+        SapConnectionProfile(sap_logon_name="PRD"),
+    )
+
+    assert isinstance(sap_connection.create_session(), WindowsSapSession)
+    assert session.created_sessions == 1
+    assert sleep_calls == [0.5]
 
 
 def test_windows_connection_lazily_initializes_com_after_uninitialize(
@@ -376,6 +419,16 @@ class FakeApplication:
         self.Children = FakeChildren(connections)
 
 
+class FakeCallableApplication(FakeApplication):
+    def __init__(self, connections: list[Any]) -> None:
+        super().__init__(connections)
+        self.called = False
+
+    def __call__(self) -> object:
+        self.called = True
+        raise RuntimeError("application object must not be called")
+
+
 class FakeConnection:
     def __init__(self, description: str, sessions: list["FakeComSession"]) -> None:
         self.Description = description
@@ -440,6 +493,21 @@ class FakeChildren:
 
     def __call__(self, index: int) -> Any:
         return self._values[index]
+
+
+class DelayedChildren(FakeChildren):
+    def __init__(self, values: list[Any], failures: int) -> None:
+        super().__init__(values)
+        self.failures = failures
+
+    def __call__(self, index: int) -> Any:
+        if self.failures > 0:
+            self.failures -= 1
+            raise RuntimeError(
+                "(614, 'sapfewse', 'The enumerator of the collection cannot find "
+                "an element with the specified index.')"
+            )
+        return super().__call__(index)
 
 
 class FakeComSession:
