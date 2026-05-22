@@ -106,6 +106,8 @@ class WindowsSapGuiClient:
                 profile,
                 require_session=True,
             )
+            session = _wait_for_connection_child(connection, 0)
+            _wait_for_session_ready(session)
         except Exception as exc:
             raise SapConnectionError(
                 "SAPHive could not open SAP GUI connection.",
@@ -591,6 +593,32 @@ def _wait_for_connection_child(
     )
 
 
+def _wait_for_session_ready(
+    session: Any,
+    *,
+    sleep: Sleep | None = None,
+) -> Any:
+    sleep_func = time.sleep if sleep is None else sleep
+    attempts = max(1, int(SAP_GUI_START_TIMEOUT_SECONDS / SAP_GUI_POLL_SECONDS))
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            session.findById("wnd[0]")
+            return session
+        except Exception as exc:
+            if not _is_retryable_sap_gui_startup_error(exc):
+                raise
+
+            last_error = exc
+            if attempt < attempts - 1:
+                sleep_func(SAP_GUI_POLL_SECONDS)
+
+    if last_error is not None:
+        raise last_error
+
+    raise SapSessionError("SAP GUI session did not become ready.")
+
+
 def _wait_for_selected_connection(
     application: Any,
     profile: Any,
@@ -703,6 +731,10 @@ def _is_session_index_not_found_error(error: Exception) -> bool:
         or "enumerator of the collection cannot find" in message
         or "614, 'sapfewse'" in message
     )
+
+
+def _is_retryable_sap_gui_startup_error(error: Exception) -> bool:
+    return _is_stale_com_proxy_error(error) or _is_session_index_not_found_error(error)
 
 
 def _is_com_not_initialized_error(error: Exception) -> bool:

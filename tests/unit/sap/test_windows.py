@@ -337,6 +337,26 @@ def test_windows_opened_connection_uses_initial_session_when_connection_disappea
     assert applications == []
 
 
+def test_windows_open_connection_uses_reselected_post_login_session() -> None:
+    stable_session = FakeComSession()
+    stable_connection = FakeConnection(description="PRD", sessions=[stable_session])
+    application = ReplacingLoginApplication(stable_connection=stable_connection)
+
+    def dispatch(name: str) -> ReplacingLoginApplication:
+        assert name == "SAPGUI"
+        return application
+
+    sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).open_connection(
+        "prd",
+        SapConnectionProfile(sap_logon_name="PRD", client="300", language="ES"),
+        SimpleNamespace(username="INV10018", password="secret"),
+    )
+
+    assert sap_connection.connection is stable_connection
+    assert sap_connection.initial_session is stable_session
+    assert application.login_session.login_pressed is True
+
+
 def test_windows_recovery_keeps_usable_session_when_connection_disappears() -> None:
     initial_session = FakeComSession()
     opened_connection = FakeConnection(description="PRD", sessions=[initial_session])
@@ -586,6 +606,23 @@ class FakeOpenApplication(FakeApplication):
         return self.opened_connection
 
 
+class ReplacingLoginApplication(FakeApplication):
+    def __init__(self, stable_connection: "FakeConnection") -> None:
+        self.stable_connection = stable_connection
+        self.login_session = LoginReplacingSession(self)
+        self.login_connection = FakeConnection(description="PRD", sessions=[self.login_session])
+        super().__init__([self.login_connection])
+        self.OpenConnection = self._open_connection
+
+    def _open_connection(self, name: str, sync: bool) -> "FakeConnection":
+        assert name == "PRD"
+        assert sync is True
+        return self.login_connection
+
+    def replace_login_connection(self) -> None:
+        self.Children = FakeChildren([self.stable_connection])
+
+
 class FakeConnection:
     def __init__(self, description: str, sessions: list["FakeComSession"]) -> None:
         self.Description = description
@@ -632,6 +669,22 @@ class UnavailableSession:
             "no está disponible ni presente; las conexiones no son válidas. "
             "La llamada no se ejecutó.', None, None)"
         )
+
+
+class LoginReplacingSession:
+    def __init__(self, application: ReplacingLoginApplication) -> None:
+        self.application = application
+        self.login_pressed = False
+        self.__dict__["findById"] = self._find_by_id
+
+    def _find_by_id(self, element_id: str) -> "FakeElement":
+        if element_id == "wnd[0]/tbar[0]/btn[0]":
+            return CallbackElement(self._press_login)
+        return FakeElement()
+
+    def _press_login(self) -> None:
+        self.login_pressed = True
+        self.application.replace_login_connection()
 
 
 class CoInitializeRequiredConnection:
@@ -734,3 +787,13 @@ class FakeElement:
 
     def press(self) -> None:
         self.pressed = True
+
+
+class CallbackElement(FakeElement):
+    def __init__(self, callback: Callable[[], None]) -> None:
+        super().__init__()
+        self.callback = callback
+
+    def press(self) -> None:
+        super().press()
+        self.callback()
