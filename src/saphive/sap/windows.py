@@ -121,7 +121,12 @@ class WindowsSapGuiClient:
         )
         try:
             sap_gui = dispatch("SAPGUI")
-            return getattr(sap_gui, "GetScriptingEngine", sap_gui)
+            scripting_engine = getattr(sap_gui, "GetScriptingEngine", None)
+            if scripting_engine is None:
+                return sap_gui
+            if callable(scripting_engine):
+                return scripting_engine()
+            return scripting_engine
         except SapConnectionError:
             raise
         except Exception as exc:

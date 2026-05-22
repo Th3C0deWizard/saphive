@@ -156,6 +156,23 @@ def test_windows_client_selects_connection_and_session() -> None:
     assert session.elements["wnd[0]/tbar[0]/btn[11]"].pressed is True
 
 
+def test_windows_client_accepts_callable_scripting_engine() -> None:
+    session = FakeComSession()
+    com_connection = FakeConnection(description="PRD", sessions=[session])
+    application = FakeApplication(connections=[com_connection])
+
+    def dispatch(name: str) -> FakeSapGuiWithCallableEngine:
+        assert name == "SAPGUI"
+        return FakeSapGuiWithCallableEngine(application=application)
+
+    sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).attach_connection(
+        "prd",
+        SapConnectionProfile(sap_logon_name="PRD"),
+    )
+
+    assert sap_connection.with_connection(lambda connection: connection.Description) == "PRD"
+
+
 def test_windows_connection_normal_operation_does_not_initialize_com(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -347,6 +364,11 @@ def test_windows_session_wraps_gui_operation_failures() -> None:
 class FakeSapGui:
     def __init__(self, application: "FakeApplication") -> None:
         self.GetScriptingEngine = application
+
+
+class FakeSapGuiWithCallableEngine:
+    def __init__(self, application: "FakeApplication") -> None:
+        self.GetScriptingEngine = lambda: application
 
 
 class FakeApplication:
