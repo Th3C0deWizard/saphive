@@ -291,6 +291,33 @@ def test_windows_opened_connection_uses_initial_session_when_connection_disappea
     assert applications == []
 
 
+def test_windows_recovery_keeps_usable_session_when_connection_disappears() -> None:
+    initial_session = FakeComSession()
+    opened_connection = FakeConnection(description="PRD", sessions=[initial_session])
+    applications = [
+        FakeOpenApplication(connections=[opened_connection], opened_connection=opened_connection),
+        FakeApplication(connections=[]),
+        FakeApplication(connections=[]),
+    ]
+
+    def dispatch(name: str) -> FakeApplication:
+        assert name == "SAPGUI"
+        return applications.pop(0)
+
+    sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).open_connection(
+        "prd",
+        SapConnectionProfile(sap_logon_name="PRD", client="300", language="ES"),
+        SimpleNamespace(username="INV10018", password="secret"),
+    )
+    opened_connection.Children = FakeChildren([])
+    wrapped_session = sap_connection.create_session()
+
+    sap_connection.recover_context_after_external_com()
+
+    assert wrapped_session.session is initial_session
+    assert applications == []
+
+
 def test_windows_connection_lazily_initializes_com_after_uninitialize(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

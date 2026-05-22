@@ -229,10 +229,20 @@ class WindowsSapConnection:
     def recover_context_after_external_com(self) -> None:
         """Refresh connection and session COM proxies after another COM owner ran."""
         if self._can_refresh_connection():
-            self._refresh_connection()
+            try:
+                self._refresh_connection()
+            except SapConnectionError:
+                if self._has_usable_managed_session():
+                    return
+                raise
 
         for session in tuple(self.managed_sessions):
-            session.refresh_from_connection()
+            try:
+                session.refresh_from_connection()
+            except Exception:
+                if session.is_usable():
+                    continue
+                raise
 
     def safe_execute(self, callback: Callable[[], T]) -> T:
         try:
@@ -289,6 +299,9 @@ class WindowsSapConnection:
 
     def _can_refresh_connection(self) -> bool:
         return self.client is not None and self.profile is not None
+
+    def _has_usable_managed_session(self) -> bool:
+        return any(session.is_usable() for session in self.managed_sessions)
 
     def _refresh_connection(self) -> None:
         if self.client is None or self.profile is None:
@@ -371,6 +384,12 @@ class WindowsSapSession:
 
     def status_bar_text(self) -> str:
         return self.get_text("wnd[0]/sbar")
+
+    def is_usable(self) -> bool:
+        try:
+            return self._session_is_usable(self._session)
+        except Exception:
+            return False
 
     def close(self) -> None:
         try:

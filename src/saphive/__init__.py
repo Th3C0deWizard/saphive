@@ -43,7 +43,7 @@ from saphive.core import (
     load_default_config,
 )
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"
 
 __all__ = [
     "AutomationError",
