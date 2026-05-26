@@ -111,11 +111,13 @@ def validate(ctx: SapContext) -> None:
 def run(ctx: SapContext) -> None:
     session = ctx.sap.create_session()
     ctx.set_output("connection", ctx.sap.connection_name)
+    session.start_transaction("IW21")
 
 def cleanup(ctx: SapContext) -> None:
     pass
 ```
 
 Scripts should not choose or open SAP connections directly. Core/CLI selects the connection, and scripts manage sessions only through `ctx.sap`.
-When a script needs a raw SAP GUI connection COM operation, use `ctx.sap.with_connection(...)` so SAPHive can apply its COM recovery handling around the callback.
-Use `ctx.sap.safe_execute(...)` for other SAP-related COM code that should retry if another library uninitialized COM mid-script.
+For independent bots sharing one SAP connection, create one dedicated session with `ctx.sap.create_session()`, run all automation through the returned session object, and let the default `created-sessions` cleanup close it after the run.
+Use `ctx.sap.attach_session(index=...)` only when intentionally taking control of an existing session.
+When a script needs a raw SAP GUI connection COM operation, use `ctx.sap.with_connection(...)`; SAPHive does not retry, rebind, or recover COM proxies automatically.

@@ -9,14 +9,14 @@ def test_sap_placeholder_fails_without_configured_client() -> None:
     placeholder = SapGuiPlaceholder()
 
     with pytest.raises(SapSessionError, match="not been configured"):
-        placeholder.active_session()
+        placeholder.create_session()
 
 
 def test_in_memory_sap_connection_matches_protocols() -> None:
     connection = InMemorySapConnection()
 
     assert isinstance(connection, SapConnection)
-    assert isinstance(connection.active_session(), SapSession)
+    assert isinstance(connection.create_session(), SapSession)
     assert (
         connection.with_connection(lambda raw_connection: raw_connection.connection_name)
         == "test"
@@ -29,6 +29,7 @@ def test_in_memory_sap_session_records_operations() -> None:
     session.start_transaction("IW21")
     session.set_text("wnd[0]/usr/ctxtQMART", "M1")
     session.press("wnd[0]/tbar[0]/btn[11]")
+    session.close()
 
     assert session.get_text("wnd[0]/usr/ctxtQMART") == "M1"
     assert session.status_bar_text() == "Saved"
@@ -36,6 +37,7 @@ def test_in_memory_sap_session_records_operations() -> None:
         ("start_transaction", "IW21"),
         ("set_text", "wnd[0]/usr/ctxtQMART"),
         ("press", "wnd[0]/tbar[0]/btn[11]"),
+        ("close", ""),
         ("get_text", "wnd[0]/usr/ctxtQMART"),
         ("status_bar_text", "wnd[0]/sbar"),
     ]

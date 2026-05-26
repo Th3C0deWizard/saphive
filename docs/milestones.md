@@ -270,7 +270,7 @@ Checklist:
 - [x] Implement `ctx.sap.list_sessions()`.
 - [x] Implement `ctx.sap.attach_session(index=0)`.
 - [x] Implement `ctx.sap.create_session()`.
-- [x] Implement `ctx.sap.active_session()` if reliable.
+- [x] Remove implicit `ctx.sap.active_session()` default-session selection.
 - [x] Explicitly avoid password CLI arguments.
 - [x] Document scheduler-safe environment-variable password usage.
 - [x] Add a Windows manual acceptance test command to docs.

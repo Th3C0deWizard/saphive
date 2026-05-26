@@ -169,9 +169,6 @@ class SapRuntime:
                             "sap_connection": sap_connection.connection_name,
                         },
                     )
-                    context_com_runtime = base_com_runtime.with_recovery_callback(
-                        lambda: _recover_sap_context(sap_connection)
-                    )
 
                 context = build_sap_context(
                     script=loaded_script.metadata,
@@ -470,12 +467,6 @@ def _cleanup_sap_connection(
     return None
 
 
-def _recover_sap_context(sap_connection: SapConnection) -> None:
-    recover = getattr(sap_connection, "recover_context_after_external_com", None)
-    if recover is not None:
-        recover()
-
-
 def _success_result(
     context: SapContext,
     started_at: datetime,
@@ -676,7 +667,7 @@ class JsonLinesFormatter(logging.Formatter):
     """JSON Lines formatter for structured run logs."""
 
     def format(self, record: logging.LogRecord) -> str:
-        payload = {
+        payload: dict[str, object] = {
             "timestamp": self.formatTime(record),
             "level": record.levelname,
             "logger": record.name,

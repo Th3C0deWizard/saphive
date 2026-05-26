@@ -150,19 +150,20 @@ def test_runtime_context_uses_injected_sap_client(tmp_path: Path) -> None:
         "sap_script",
         validate_body='ctx.set_output("validated", True)',
         run_body=(
-            'session = ctx.sap.active_session()\n'
+            'session = ctx.sap.create_session()\n'
             '    session.start_transaction("IW21")\n'
             '    ctx.set_output("status", session.status_bar_text())'
         ),
     )
     sap_session = InMemorySapSession(status_text="Notification created")
-    runtime = SapRuntime(sap=InMemorySapConnection(session=sap_session))
+    sap_connection = InMemorySapConnection(session=sap_session)
+    runtime = SapRuntime(sap=sap_connection)
 
     result = runtime.run_script(script_path)
 
     assert result.status is ExecutionStatus.SUCCESS
     assert result.outputs == {"validated": True, "status": "Notification created"}
-    assert sap_session.operations == [
+    assert sap_connection.closed_created_sessions[0].operations == [
         ("start_transaction", "IW21"),
         ("status_bar_text", "wnd[0]/sbar"),
     ]
@@ -268,7 +269,7 @@ def test_runtime_connection_cleanup_respects_force_flag(tmp_path: Path) -> None:
         script_path,
         "connection_cleanup",
         validate_body='ctx.set_output("validated", True)',
-        run_body='ctx.sap.active_session()',
+        run_body='ctx.sap.create_session()',
     )
     connection = InMemorySapConnection(opened_by_saphive=False)
     runtime = SapRuntime(
@@ -305,7 +306,7 @@ def test_runtime_keeps_com_initialized_while_sap_script_runs(
         validate_body='ctx.set_output("validated", True)',
         run_body=(
             'ctx.set_output("events_before_sap", tuple(ctx.sap.events))\n'
-            '    ctx.sap.active_session()\n'
+            '    ctx.sap.create_session()\n'
             '    ctx.set_output("events_after_sap", tuple(ctx.sap.events))'
         ),
     )
@@ -558,15 +559,8 @@ class EventRecordingSapConnection:
         self.events.append("sap")
         return self.session
 
-    def active_session(self) -> InMemorySapSession:
-        self.events.append("sap")
-        return self.session
-
     def with_connection(self, callback: Callable[[Any], T]) -> T:
         return callback(self)
-
-    def safe_execute(self, callback: Callable[[], T]) -> T:
-        return callback()
 
     def close_created_sessions(self) -> None:
         self.events.append("close_created_sessions")

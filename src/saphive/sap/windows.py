@@ -20,6 +20,7 @@ T = TypeVar("T")
 
 SAP_GUI_START_TIMEOUT_SECONDS = 10.0
 SAP_GUI_POLL_SECONDS = 0.5
+SAP_SESSION_CREATE_TIMEOUT_SECONDS = 10.0
 SAP_LOGON_EXECUTABLE_CANDIDATES = (
     Path("C:/Program Files/SAP/FrontEnd/SAPgui/saplogon.exe"),
     Path("C:/Program Files (x86)/SAP/FrontEnd/SAPgui/saplogon.exe"),
@@ -101,12 +102,6 @@ class WindowsSapGuiClient:
             connection = application.OpenConnection(profile.sap_logon_name, True)
             session = _wait_for_connection_child(connection, 0)
             _login(session, profile, credentials)
-            connection = _wait_for_selected_connection(
-                application,
-                profile,
-                require_session=True,
-            )
-            session = _wait_for_connection_child(connection, 0)
             _wait_for_session_ready(session)
         except Exception as exc:
             raise SapConnectionError(
@@ -150,7 +145,6 @@ class WindowsSapConnection:
     opened_by_saphive: bool = False
     initial_session: Any | None = field(default=None, repr=False, compare=False)
     created_sessions: list["WindowsSapSession"] = field(default_factory=list, repr=False)
-    managed_sessions: list["WindowsSapSession"] = field(default_factory=list, repr=False)
 
     def list_sessions(self) -> tuple["WindowsSapSession", ...]:
         try:
@@ -183,84 +177,36 @@ class WindowsSapConnection:
 
     def create_session(self) -> "WindowsSapSession":
         try:
-            return self.with_connection(self._create_session_without_retry)
+            return self.with_connection(self._create_session)
         except Exception as exc:
             raise SapSessionError(
                 "SAPHive could not create SAP GUI session.",
                 details={"connection": self.connection_name, "error": str(exc)},
             ) from exc
 
-    def active_session(self) -> "WindowsSapSession":
-        return self.attach_session(0)
-
     def with_connection(self, callback: Callable[[Any], T]) -> T:
-        try:
-            return callback(self.connection)
-        except Exception as exc:
-            if _is_com_not_initialized_error(exc):
-                return self._retry_callback_with_initialized_com(callback)
+        return callback(self.connection)
 
-            if _is_stale_com_proxy_error(exc):
-                return self._refresh_and_retry_callback(callback)
+    def _create_session(self, connection: Any) -> "WindowsSapSession":
+        before_sessions = _wait_for_connection_sessions(connection)
+        if not before_sessions:
+            raise SapSessionError(
+                "SAP GUI connection does not have a source session to create from.",
+                details={"connection": self.connection_name},
+            )
 
-            raise
-
-    def _create_session_without_retry(self, connection: Any) -> "WindowsSapSession":
-        before_count = _connection_session_count(connection)
-        if before_count == 0 and self._can_refresh_connection():
-            try:
-                self._refresh_connection()
-            except SapConnectionError:
-                if self.initial_session is not None:
-                    return self._wrap_session(self.initial_session, 0)
-                raise
-
-            connection = self.connection
-            before_count = _connection_session_count(connection)
-
-        if before_count == 0 and self.initial_session is not None:
-            return self._wrap_session(self.initial_session, 0)
-
-        _wait_for_connection_child(connection, 0).CreateSession()
-        after_count = int(connection.Children.Count)
-        if after_count <= before_count:
-            return self._wrap_session(connection.Children(0), 0)
-
-        session_index = after_count - 1
-        session = self._wrap_session(connection.Children(session_index), session_index)
+        before_sessions[0].CreateSession()
+        session_index, raw_session = _wait_for_created_session(
+            connection,
+            before_sessions,
+            connection_name=self.connection_name,
+        )
+        session = self._wrap_session(raw_session, session_index)
         self.created_sessions.append(session)
         return session
 
-    def recover_context_after_external_com(self) -> None:
-        """Refresh connection and session COM proxies after another COM owner ran."""
-        if self._can_refresh_connection():
-            try:
-                self._refresh_connection()
-            except SapConnectionError:
-                if self._has_usable_managed_session():
-                    return
-                raise
-
-        for session in tuple(self.managed_sessions):
-            try:
-                session.refresh_from_connection()
-            except Exception:
-                if session.is_usable():
-                    continue
-                raise
-
-    def safe_execute(self, callback: Callable[[], T]) -> T:
-        try:
-            return callback()
-        except Exception as exc:
-            if not _is_com_not_initialized_error(exc):
-                raise
-
-            with sap_com_initialized():
-                return callback()
-
     def close_created_sessions(self) -> None:
-        for session in reversed(self.created_sessions):
+        for session in tuple(reversed(self.created_sessions)):
             session.close()
 
         self.created_sessions.clear()
@@ -276,60 +222,25 @@ class WindowsSapConnection:
             return
 
         client = self.client
-        self.safe_execute(
-            lambda: _close_application(client._application(start_sap_logon=False))
-        )
-
-    def _retry_callback_with_initialized_com(self, callback: Callable[[Any], T]) -> T:
-        with sap_com_initialized():
-            try:
-                return callback(self.connection)
-            except Exception as exc:
-                if _is_stale_com_proxy_error(exc):
-                    self._refresh_connection()
-                    return callback(self.connection)
-
-                raise
-
-    def _refresh_and_retry_callback(self, callback: Callable[[Any], T]) -> T:
-        if not self._can_refresh_connection():
-            raise SapConnectionError(
-                "SAPHive could not refresh a stale SAP GUI connection.",
-                details={"connection": self.connection_name},
-            )
-
-        with sap_com_initialized():
-            self._refresh_connection()
-            return callback(self.connection)
-
-    def _can_refresh_connection(self) -> bool:
-        return self.client is not None and self.profile is not None
-
-    def _has_usable_managed_session(self) -> bool:
-        return any(session.is_usable() for session in self.managed_sessions)
-
-    def _refresh_connection(self) -> None:
-        if self.client is None or self.profile is None:
-            return
-
-        application = self.client._application(start_sap_logon=False)
-        connection = _select_connection(application, self.profile)
-        object.__setattr__(self, "connection", connection)
+        _close_application(client._application(start_sap_logon=False))
 
     def _wrap_session(self, session: Any, session_index: int) -> "WindowsSapSession":
-        wrapped = WindowsSapSession(
+        return WindowsSapSession(
             session=session,
             connection_owner=self,
             session_index=session_index,
+            session_identity=_session_identity(session),
         )
-        self.managed_sessions.append(wrapped)
-        return wrapped
+
+    def _forget_created_session(self, session: "WindowsSapSession") -> None:
+        with suppress(ValueError):
+            self.created_sessions.remove(session)
 
 
 class WindowsSapSession:
     """Thin wrapper around a COM SAP GUI Scripting session object."""
 
-    __slots__ = ("_session", "connection_owner", "session_index")
+    __slots__ = ("_closed", "_session", "connection_owner", "session_identity", "session_index")
 
     def __init__(
         self,
@@ -337,21 +248,21 @@ class WindowsSapSession:
         *,
         connection_owner: WindowsSapConnection | None = None,
         session_index: int | None = None,
+        session_identity: str | None = None,
     ) -> None:
+        self._closed = False
         self._session = session
         self.connection_owner = connection_owner
         self.session_index = session_index
+        self.session_identity = session_identity
 
     @property
     def session(self) -> Any:
-        if self._session_is_usable(self._session):
-            return self._session
-
-        return self._refresh_session()
+        return self._session
 
     def start_transaction(self, transaction_code: str) -> None:
         try:
-            self._with_com_retry(lambda: self.session.StartTransaction(transaction_code))
+            self.session.StartTransaction(transaction_code)
         except Exception as exc:
             raise SapGuiError(
                 "SAPHive could not start SAP transaction.",
@@ -360,7 +271,7 @@ class WindowsSapSession:
 
     def set_text(self, element_id: str, value: str) -> None:
         try:
-            self._with_com_retry(lambda: setattr(self.session.findById(element_id), "Text", value))
+            self.session.findById(element_id).Text = value
         except Exception as exc:
             raise SapGuiError(
                 "SAPHive could not set SAP GUI element text.",
@@ -369,7 +280,7 @@ class WindowsSapSession:
 
     def press(self, element_id: str) -> None:
         try:
-            self._with_com_retry(lambda: self.session.findById(element_id).press())
+            self.session.findById(element_id).press()
         except Exception as exc:
             raise SapGuiError(
                 "SAPHive could not press SAP GUI element.",
@@ -378,7 +289,7 @@ class WindowsSapSession:
 
     def get_text(self, element_id: str) -> str:
         try:
-            value = self._with_com_retry(lambda: self.session.findById(element_id).Text)
+            value = self.session.findById(element_id).Text
         except Exception as exc:
             raise SapGuiError(
                 "SAPHive could not read SAP GUI element text.",
@@ -392,58 +303,25 @@ class WindowsSapSession:
 
     def is_usable(self) -> bool:
         try:
-            return self._session_is_usable(self._session)
+            self.session.findById("wnd[0]")
+            return True
         except Exception:
             return False
 
     def close(self) -> None:
+        if self._closed:
+            return
+
         try:
-            self._with_com_retry(lambda: _close_session(self.session))
+            _close_session(self.session)
         except Exception as exc:
             raise SapSessionError(
                 "SAPHive could not close SAP GUI session.",
                 details={"error": str(exc)},
             ) from exc
-
-    def _with_com_retry(self, action: Callable[[], T]) -> T:
-        try:
-            return action()
-        except Exception as exc:
-            if _is_stale_com_proxy_error(exc):
-                self._refresh_session()
-                return action()
-
-            if not _is_com_not_initialized_error(exc):
-                raise
-
-            with sap_com_initialized():
-                return action()
-
-    def _session_is_usable(self, session: Any) -> bool:
-        try:
-            session.findById("wnd[0]")
-            return True
-        except Exception as exc:
-            if _is_stale_com_proxy_error(exc):
-                return False
-
-            raise
-
-    def _refresh_session(self) -> Any:
-        if self.connection_owner is None or self.session_index is None:
-            raise SapSessionError("SAPHive could not refresh a stale SAP GUI session.")
-
-        return self.refresh_from_connection()
-
-    def refresh_from_connection(self) -> Any:
-        if self.connection_owner is None or self.session_index is None:
-            raise SapSessionError("SAPHive could not refresh a stale SAP GUI session.")
-
-        session = self.connection_owner.with_connection(
-            lambda connection: connection.Children(self.session_index)
-        )
-        self._session = session
-        return session
+        self._closed = True
+        if self.connection_owner is not None:
+            self.connection_owner._forget_created_session(self)
 
 
 def _load_dispatch_factory(
@@ -619,36 +497,6 @@ def _wait_for_session_ready(
     raise SapSessionError("SAP GUI session did not become ready.")
 
 
-def _wait_for_selected_connection(
-    application: Any,
-    profile: Any,
-    *,
-    require_session: bool = False,
-    sleep: Sleep | None = None,
-) -> Any:
-    sleep_func = time.sleep if sleep is None else sleep
-    attempts = max(1, int(SAP_GUI_START_TIMEOUT_SECONDS / SAP_GUI_POLL_SECONDS))
-    last_error: Exception | None = None
-    for attempt in range(attempts):
-        try:
-            connection = _select_connection(application, profile)
-            if not require_session or _connection_session_count(connection) > 0:
-                return connection
-        except Exception as exc:
-            last_error = exc
-
-        if attempt < attempts - 1:
-            sleep_func(SAP_GUI_POLL_SECONDS)
-
-    if last_error is not None:
-        raise last_error
-
-    raise SapConnectionError(
-        "SAP GUI connection was found but did not expose any sessions.",
-        details={"sap_logon_name": profile.sap_logon_name, "client": profile.client},
-    )
-
-
 def _select_connection(application: Any, profile: Any) -> Any:
     matching_connections: list[Any] = []
     try:
@@ -667,12 +515,18 @@ def _select_connection(application: Any, profile: Any) -> Any:
         if _connection_matches(connection, profile):
             matching_connections.append(connection)
 
-    for connection in matching_connections:
-        if _connection_session_count(connection) > 0:
-            return connection
-
-    if matching_connections:
+    if len(matching_connections) == 1:
         return matching_connections[0]
+
+    if len(matching_connections) > 1:
+        raise SapConnectionError(
+            "Requested SAP GUI connection matched multiple open connections.",
+            details={
+                "sap_logon_name": profile.sap_logon_name,
+                "client": profile.client,
+                "matching_connection_count": len(matching_connections),
+            },
+        )
 
     raise SapConnectionError(
         "Requested SAP GUI connection was not found.",
@@ -695,11 +549,116 @@ def _connection_matches(connection: Any, profile: Any) -> bool:
     return bool(str(getattr(connection, "Client", profile.client)) == profile.client)
 
 
-def _connection_session_count(connection: Any) -> int:
+def _connection_sessions(connection: Any) -> tuple[Any, ...]:
+    session_count = int(connection.Children.Count)
+    return tuple(connection.Children(index) for index in range(session_count))
+
+
+def _wait_for_connection_sessions(
+    connection: Any,
+    *,
+    sleep: Sleep | None = None,
+) -> tuple[Any, ...]:
+    sleep_func = time.sleep if sleep is None else sleep
+    attempts = max(1, int(SAP_GUI_START_TIMEOUT_SECONDS / SAP_GUI_POLL_SECONDS))
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return _connection_sessions(connection)
+        except Exception as exc:
+            if not _is_session_index_not_found_error(exc):
+                raise
+
+            last_error = exc
+            if attempt < attempts - 1:
+                sleep_func(SAP_GUI_POLL_SECONDS)
+
+    if last_error is not None:
+        raise last_error
+
+    raise SapSessionError("SAP GUI connection did not expose its sessions.")
+
+
+def _wait_for_created_session(
+    connection: Any,
+    before_sessions: tuple[Any, ...],
+    *,
+    connection_name: str,
+    sleep: Sleep | None = None,
+) -> tuple[int, Any]:
+    sleep_func = time.sleep if sleep is None else sleep
+    attempts = max(1, int(SAP_SESSION_CREATE_TIMEOUT_SECONDS / SAP_GUI_POLL_SECONDS))
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            candidate = _find_created_session(before_sessions, _connection_sessions(connection))
+            if candidate is not None:
+                return candidate
+        except Exception as exc:
+            last_error = exc
+
+        if attempt < attempts - 1:
+            sleep_func(SAP_GUI_POLL_SECONDS)
+
+    details: dict[str, object] = {
+        "connection": connection_name,
+        "before_count": len(before_sessions),
+    }
+    if last_error is not None:
+        details["error"] = str(last_error)
+    raise SapSessionError(
+        "SAP GUI did not expose exactly one newly created session.",
+        details=details,
+    )
+
+
+def _find_created_session(
+    before_sessions: tuple[Any, ...],
+    after_sessions: tuple[Any, ...],
+) -> tuple[int, Any] | None:
+    if len(after_sessions) <= len(before_sessions):
+        return None
+
+    before_identities = set()
+    for session in before_sessions:
+        identity = _session_identity(session)
+        if identity is not None:
+            before_identities.add(identity)
+    if before_identities:
+        candidates = [
+            (index, session)
+            for index, session in enumerate(after_sessions)
+            if _session_identity(session) not in before_identities
+        ]
+        if len(candidates) == 1:
+            return candidates[0]
+        if len(candidates) > 1:
+            raise SapSessionError(
+                "SAP GUI exposed multiple newly created sessions.",
+                details={"new_session_count": len(candidates)},
+            )
+        return None
+
+    if len(after_sessions) == len(before_sessions) + 1:
+        session_index = len(after_sessions) - 1
+        return session_index, after_sessions[session_index]
+
+    raise SapSessionError(
+        "SAP GUI exposed multiple newly created sessions.",
+        details={"new_session_count": len(after_sessions) - len(before_sessions)},
+    )
+
+
+def _session_identity(session: Any) -> str | None:
     try:
-        return int(connection.Children.Count)
+        identity = session.Id
     except Exception:
-        return 0
+        return None
+
+    if identity is None:
+        return None
+
+    return str(identity)
 
 
 def _is_stale_com_proxy_error(error: Exception) -> bool:
@@ -735,18 +694,6 @@ def _is_session_index_not_found_error(error: Exception) -> bool:
 
 def _is_retryable_sap_gui_startup_error(error: Exception) -> bool:
     return _is_stale_com_proxy_error(error) or _is_session_index_not_found_error(error)
-
-
-def _is_com_not_initialized_error(error: Exception) -> bool:
-    message = str(error).lower()
-    return (
-        ("coinitialize" in message
-        and (
-            "has not been called" in message
-            or "no se ha llamado" in message
-        ))
-        or "-2147221008" in message
-    )
 
 
 def _close_session(session: Any) -> None:

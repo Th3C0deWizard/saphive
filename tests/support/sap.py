@@ -37,6 +37,9 @@ class InMemorySapSession:
         self.operations.append(("status_bar_text", "wnd[0]/sbar"))
         return self.status_text
 
+    def close(self) -> None:
+        self.operations.append(("close", ""))
+
 
 @dataclass(slots=True)
 class InMemorySapConnection:
@@ -60,14 +63,8 @@ class InMemorySapConnection:
         self.created_sessions.append(session)
         return session
 
-    def active_session(self) -> SapSession:
-        return self.session
-
     def with_connection(self, callback: Callable[[Any], T]) -> T:
         return callback(self)
-
-    def safe_execute(self, callback: Callable[[], T]) -> T:
-        return callback()
 
     def close_created_sessions(self) -> None:
         self.cleanup_operations.append("close_created_sessions")

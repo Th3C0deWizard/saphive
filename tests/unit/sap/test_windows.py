@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from saphive import SapConnectionError, SapConnectionProfile, SapGuiError
+from saphive import SapConnectionError, SapConnectionProfile, SapGuiError, SapSessionError
 from saphive.sap import WindowsSapGuiClient, WindowsSapSession
 from saphive.sap.windows import _load_dispatch_factory
 
@@ -194,8 +194,10 @@ def test_windows_client_does_not_call_application_like_scripting_engine() -> Non
 def test_windows_connection_normal_operation_does_not_initialize_com(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session = FakeComSession()
-    com_connection = FakeConnection(description="PRD", sessions=[session])
+    com_connection = FakeConnection(description="PRD", sessions=[])
+    session = GrowingComSession(com_connection.Children)
+    com_connection.Children._values.append(session)
+    com_connection.Children.Count = 1
     application = FakeApplication(connections=[com_connection])
 
     def dispatch(name: str) -> FakeSapGui:
@@ -219,9 +221,12 @@ def test_windows_connection_normal_operation_does_not_initialize_com(
 def test_windows_connection_waits_for_initial_session_before_create(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session = FakeComSession()
-    com_connection = FakeConnection(description="PRD", sessions=[session])
-    com_connection.Children = DelayedChildren([session], failures=1)
+    com_connection = FakeConnection(description="PRD", sessions=[])
+    children = DelayedChildren([], failures=1)
+    session = GrowingComSession(children)
+    children._values.append(session)
+    children.Count = 1
+    com_connection.Children = children
     application = FakeApplication(connections=[com_connection])
 
     def dispatch(name: str) -> FakeSapGui:
@@ -241,7 +246,7 @@ def test_windows_connection_waits_for_initial_session_before_create(
     assert sleep_calls == [0.5]
 
 
-def test_windows_connection_does_not_track_session_when_create_does_not_increase_count() -> None:
+def test_windows_connection_fails_when_create_does_not_expose_new_session() -> None:
     session = FakeComSession()
     com_connection = FakeConnection(description="PRD", sessions=[session])
     application = FakeApplication(connections=[com_connection])
@@ -255,12 +260,10 @@ def test_windows_connection_does_not_track_session_when_create_does_not_increase
         SapConnectionProfile(sap_logon_name="PRD"),
     )
 
-    wrapped_session = sap_connection.create_session()
-    sap_connection.close_created_sessions()
+    with pytest.raises(SapSessionError, match="could not create SAP GUI session"):
+        sap_connection.create_session()
 
-    assert wrapped_session.session is session
     assert session.created_sessions == 1
-    assert session.closed_sessions == 0
 
 
 def test_windows_connection_closes_only_session_created_by_create_session() -> None:
@@ -287,42 +290,34 @@ def test_windows_connection_closes_only_session_created_by_create_session() -> N
     assert created_session.closed_sessions == 1
 
 
-def test_windows_connection_refreshes_connection_without_sessions_before_create() -> None:
-    stale_connection = FakeConnection(description="PRD", sessions=[])
-    fresh_session = FakeComSession()
-    fresh_connection = FakeConnection(description="PRD", sessions=[fresh_session])
-    applications = [
-        FakeApplication(connections=[stale_connection]),
-        FakeApplication(connections=[fresh_connection]),
-    ]
+def test_windows_connection_fails_when_no_source_session_exists() -> None:
+    com_connection = FakeConnection(description="PRD", sessions=[])
+    application = FakeApplication(connections=[com_connection])
 
     def dispatch(name: str) -> FakeSapGui:
         assert name == "SAPGUI"
-        return FakeSapGui(application=applications.pop(0))
+        return FakeSapGui(application=application)
 
     sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).attach_connection(
         "prd",
         SapConnectionProfile(sap_logon_name="PRD"),
     )
 
-    wrapped_session = sap_connection.create_session()
-
-    assert isinstance(wrapped_session, WindowsSapSession)
-    assert fresh_session.created_sessions == 1
-    assert applications == []
+    with pytest.raises(SapSessionError, match="could not create SAP GUI session"):
+        sap_connection.create_session()
 
 
-def test_windows_opened_connection_uses_initial_session_when_connection_disappears() -> None:
+def test_windows_opened_connection_does_not_fallback_when_connection_loses_sessions() -> None:
     initial_session = FakeComSession()
     opened_connection = FakeConnection(description="PRD", sessions=[initial_session])
-    applications = [
-        FakeOpenApplication(connections=[opened_connection], opened_connection=opened_connection),
-        FakeApplication(connections=[]),
-    ]
+    application = FakeOpenApplication(
+        connections=[opened_connection],
+        opened_connection=opened_connection,
+    )
 
     def dispatch(name: str) -> FakeApplication:
         assert name == "SAPGUI"
-        return applications.pop(0)
+        return application
 
     sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).open_connection(
         "prd",
@@ -331,13 +326,11 @@ def test_windows_opened_connection_uses_initial_session_when_connection_disappea
     )
     opened_connection.Children = FakeChildren([])
 
-    wrapped_session = sap_connection.create_session()
-
-    assert wrapped_session.session is initial_session
-    assert applications == []
+    with pytest.raises(SapSessionError, match="could not create SAP GUI session"):
+        sap_connection.create_session()
 
 
-def test_windows_open_connection_uses_reselected_post_login_session() -> None:
+def test_windows_open_connection_keeps_opened_connection_after_login() -> None:
     stable_session = FakeComSession()
     stable_connection = FakeConnection(description="PRD", sessions=[stable_session])
     application = ReplacingLoginApplication(stable_connection=stable_connection)
@@ -352,39 +345,12 @@ def test_windows_open_connection_uses_reselected_post_login_session() -> None:
         SimpleNamespace(username="INV10018", password="secret"),
     )
 
-    assert sap_connection.connection is stable_connection
-    assert sap_connection.initial_session is stable_session
+    assert sap_connection.connection is application.login_connection
+    assert sap_connection.initial_session is application.login_session
     assert application.login_session.login_pressed is True
 
 
-def test_windows_recovery_keeps_usable_session_when_connection_disappears() -> None:
-    initial_session = FakeComSession()
-    opened_connection = FakeConnection(description="PRD", sessions=[initial_session])
-    applications = [
-        FakeOpenApplication(connections=[opened_connection], opened_connection=opened_connection),
-        FakeApplication(connections=[]),
-        FakeApplication(connections=[]),
-    ]
-
-    def dispatch(name: str) -> FakeApplication:
-        assert name == "SAPGUI"
-        return applications.pop(0)
-
-    sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).open_connection(
-        "prd",
-        SapConnectionProfile(sap_logon_name="PRD", client="300", language="ES"),
-        SimpleNamespace(username="INV10018", password="secret"),
-    )
-    opened_connection.Children = FakeChildren([])
-    wrapped_session = sap_connection.create_session()
-
-    sap_connection.recover_context_after_external_com()
-
-    assert wrapped_session.session is initial_session
-    assert applications == []
-
-
-def test_windows_connection_lazily_initializes_com_after_uninitialize(
+def test_windows_connection_fails_when_com_was_uninitialized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
@@ -422,12 +388,14 @@ def test_windows_connection_lazily_initializes_com_after_uninitialize(
         SapConnectionProfile(sap_logon_name="PRD"),
     )
 
-    assert isinstance(sap_connection.create_session(), WindowsSapSession)
-    assert session.created_sessions == 1
-    assert events == ["init", "uninit"]
+    with pytest.raises(SapSessionError, match="could not create SAP GUI session"):
+        sap_connection.create_session()
+
+    assert session.created_sessions == 0
+    assert events == []
 
 
-def test_windows_connection_refreshes_stale_com_proxy_before_creating_session() -> None:
+def test_windows_connection_fails_on_stale_com_proxy() -> None:
     stale_connection = StaleConnection(description="PRD")
     fresh_session = FakeComSession()
     fresh_connection = FakeConnection(description="PRD", sessions=[fresh_session])
@@ -445,14 +413,14 @@ def test_windows_connection_refreshes_stale_com_proxy_before_creating_session() 
         SapConnectionProfile(sap_logon_name="PRD"),
     )
 
-    wrapped_session = sap_connection.create_session()
+    with pytest.raises(SapSessionError, match="could not create SAP GUI session"):
+        sap_connection.create_session()
 
-    assert isinstance(wrapped_session, WindowsSapSession)
-    assert fresh_session.created_sessions == 1
-    assert applications == []
+    assert fresh_session.created_sessions == 0
+    assert len(applications) == 1
 
 
-def test_windows_connection_refreshes_disconnected_com_proxy_before_creating_session() -> None:
+def test_windows_connection_fails_on_disconnected_com_proxy() -> None:
     disconnected_connection = DisconnectedConnection(description="PRD")
     fresh_session = FakeComSession()
     fresh_connection = FakeConnection(description="PRD", sessions=[fresh_session])
@@ -470,14 +438,14 @@ def test_windows_connection_refreshes_disconnected_com_proxy_before_creating_ses
         SapConnectionProfile(sap_logon_name="PRD"),
     )
 
-    wrapped_session = sap_connection.create_session()
+    with pytest.raises(SapSessionError, match="could not create SAP GUI session"):
+        sap_connection.create_session()
 
-    assert isinstance(wrapped_session, WindowsSapSession)
-    assert fresh_session.created_sessions == 1
-    assert applications == []
+    assert fresh_session.created_sessions == 0
+    assert len(applications) == 1
 
 
-def test_windows_session_refreshes_stale_raw_session_proxy() -> None:
+def test_windows_session_does_not_rebind_stale_raw_session_proxy() -> None:
     stale_session = StaleSession()
     fresh_session = FakeComSession()
     com_connection = FakeConnection(description="PRD", sessions=[stale_session])
@@ -494,12 +462,13 @@ def test_windows_session_refreshes_stale_raw_session_proxy() -> None:
     wrapped_session = sap_connection.attach_session()
     com_connection.Children._values[0] = fresh_session
 
-    wrapped_session.start_transaction("IW21")
+    with pytest.raises(SapGuiError, match="could not start SAP transaction"):
+        wrapped_session.start_transaction("IW21")
 
-    assert fresh_session.started_transactions == ["IW21"]
+    assert fresh_session.started_transactions == []
 
 
-def test_windows_session_refreshes_unavailable_raw_session_proxy() -> None:
+def test_windows_session_does_not_rebind_unavailable_raw_session_proxy() -> None:
     unavailable_session = UnavailableSession()
     fresh_session = FakeComSession()
     com_connection = FakeConnection(description="PRD", sessions=[unavailable_session])
@@ -516,33 +485,10 @@ def test_windows_session_refreshes_unavailable_raw_session_proxy() -> None:
     wrapped_session = sap_connection.attach_session()
     com_connection.Children._values[0] = fresh_session
 
-    wrapped_session.start_transaction("IW41")
+    with pytest.raises(SapGuiError, match="could not start SAP transaction"):
+        wrapped_session.start_transaction("IW41")
 
-    assert fresh_session.started_transactions == ["IW41"]
-
-
-def test_windows_connection_recovers_sessions_after_external_com() -> None:
-    original_session = FakeComSession()
-    fresh_session = FakeComSession()
-    com_connection = FakeConnection(description="PRD", sessions=[original_session])
-    application = FakeApplication(connections=[com_connection])
-
-    def dispatch(name: str) -> FakeSapGui:
-        assert name == "SAPGUI"
-        return FakeSapGui(application=application)
-
-    sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).attach_connection(
-        "prd",
-        SapConnectionProfile(sap_logon_name="PRD"),
-    )
-    wrapped_session = sap_connection.attach_session()
-    com_connection.Children._values[0] = fresh_session
-
-    sap_connection.recover_context_after_external_com()
-    wrapped_session.start_transaction("IW21")
-
-    assert original_session.started_transactions == []
-    assert fresh_session.started_transactions == ["IW21"]
+    assert fresh_session.started_transactions == []
 
 
 def test_windows_client_raises_when_connection_name_is_missing() -> None:
@@ -733,7 +679,11 @@ class DelayedChildren(FakeChildren):
 
 
 class FakeComSession:
+    _next_id = 0
+
     def __init__(self) -> None:
+        FakeComSession._next_id += 1
+        self.Id = f"ses-{FakeComSession._next_id}"
         self.elements: dict[str, FakeElement] = {}
         self.started_transactions: list[str] = []
         self.created_sessions = 0

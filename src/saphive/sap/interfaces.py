@@ -31,6 +31,9 @@ class SapSession(Protocol):
     def status_bar_text(self) -> str:
         """Read the SAP GUI status bar text."""
 
+    def close(self) -> None:
+        """Close this SAP GUI session."""
+
 
 @runtime_checkable
 class SapConnection(Protocol):
@@ -49,14 +52,8 @@ class SapConnection(Protocol):
     def create_session(self) -> SapSession:
         """Create a new session inside the selected SAP connection."""
 
-    def active_session(self) -> SapSession:
-        """Return the active or default session inside the selected SAP connection."""
-
     def with_connection(self, callback: Callable[[Any], T]) -> T:
-        """Run a callback with the raw connection object inside SAPHive recovery handling."""
-
-    def safe_execute(self, callback: Callable[[], T]) -> T:
-        """Run arbitrary code inside SAPHive lazy COM recovery handling."""
+        """Run a callback with the raw connection object."""
 
     def close_created_sessions(self) -> None:
         """Close SAP sessions created through this connection wrapper."""
@@ -109,15 +106,7 @@ class SapGuiPlaceholder:
         """Fail clearly until a SAP GUI connection is supplied."""
         raise SapSessionError("SAP GUI session handling has not been configured yet.")
 
-    def active_session(self) -> SapSession:
-        """Fail clearly until a SAP GUI connection is supplied."""
-        raise SapSessionError("SAP GUI session handling has not been configured yet.")
-
     def with_connection(self, callback: Callable[[Any], T]) -> T:
-        """Fail clearly until a SAP GUI connection is supplied."""
-        raise SapConnectionError("SAP GUI connection has not been configured yet.")
-
-    def safe_execute(self, callback: Callable[[], T]) -> T:
         """Fail clearly until a SAP GUI connection is supplied."""
         raise SapConnectionError("SAP GUI connection has not been configured yet.")
 

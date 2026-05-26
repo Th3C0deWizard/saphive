@@ -292,7 +292,7 @@ SapContext
 
 Core and the CLI own SAP connection selection. A run chooses one SAP connection using configuration plus CLI overrides before the script executes. The selected connection is then exposed to the script as `ctx.sap`.
 
-Scripts should manage sessions only within that selected connection. For each independent automation bot, the recommended pattern is to create or attach to a dedicated SAP session inside the script, execute SAP GUI Scripting work over that session, and close or release it when appropriate.
+Scripts should manage sessions only within that selected connection. For each independent automation bot, the recommended pattern is to create one dedicated SAP session inside the script, execute all SAP GUI Scripting work over that returned session object, and let SAPHive close the created session during cleanup. Attaching to an existing session should be an explicit operational choice.
 
 ## SAP GUI Abstraction
 
@@ -350,6 +350,8 @@ def run(ctx: SapContext) -> None:
     session.press("wnd[0]/tbar[0]/btn[11]")
 ```
 
+`ctx.sap.create_session()` must identify a newly created SAP GUI session. If SAP GUI does not expose exactly one new session, SAPHive fails the run instead of returning another existing session.
+
 Alternative attach pattern:
 
 ```python
@@ -359,6 +361,7 @@ def run(ctx: SapContext) -> None:
 ```
 
 Core should support these flows without forcing one global runtime-owned SAP session. The connection is runtime-owned; sessions are script-managed.
+SAPHive does not automatically rebind stale session wrappers to a different session index or refresh stale connection proxies. Scripts should keep using the session object returned by `create_session()` or `attach_session()`. COM lifecycle conflicts should be isolated by running conflicting COM owners on separate threads or explicit COM boundaries instead of relying on implicit SAP proxy recovery.
 
 Scripts may define `cleanup(ctx)` for script-owned resources such as downloaded files,
 workbooks, or custom COM objects. SAPHive always runs `cleanup(ctx)` after `run(ctx)`, including
@@ -407,9 +410,7 @@ ctx.sap.connection_name
 ctx.sap.list_sessions()
 ctx.sap.attach_session(index=0)
 ctx.sap.create_session()
-ctx.sap.active_session()
 ctx.sap.with_connection(callback)
-ctx.sap.safe_execute(callback)
 ctx.sap.close_created_sessions()
 ctx.sap.close_connection(force=False)
 ctx.sap.close_application()

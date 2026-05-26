@@ -103,7 +103,7 @@ def test_build_sap_context_attaches_sap_placeholder() -> None:
 
     assert isinstance(context.sap, SapGuiPlaceholder)
     with pytest.raises(SapSessionError, match="not been configured"):
-        context.sap.active_session()
+        context.sap.create_session()
 
 
 def test_build_sap_context_accepts_sap_test_double() -> None:

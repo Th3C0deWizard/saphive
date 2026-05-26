@@ -426,7 +426,7 @@ Steps:
 8. Implement `ctx.sap.list_sessions()`.
 9. Implement `ctx.sap.attach_session(index=0)`.
 10. Implement `ctx.sap.create_session()`.
-11. Implement `ctx.sap.active_session()` if SAP GUI exposes an active session reliably.
+11. Avoid implicit active-session selection; scripts should create or attach sessions explicitly.
 12. Explicitly avoid password CLI arguments.
 
 Auth file shape:
@@ -476,7 +476,6 @@ ctx.sap.connection_name
 ctx.sap.list_sessions()
 ctx.sap.attach_session(index=0)
 ctx.sap.create_session()
-ctx.sap.active_session()
 ```
 
 Session API required for MVP:
@@ -487,6 +486,7 @@ session.set_text(element_id, value)
 session.get_text(element_id)
 session.press(element_id)
 session.status_bar_text()
+session.close()
 ```
 
 The script-facing `ctx.sap` object must not expose APIs for opening or choosing SAP connections in the MVP.
