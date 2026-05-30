@@ -82,6 +82,7 @@ class SapRuntime:
         logger, logs_path = _build_run_logger(
             run_id=resolved_run_id,
             script=str(script),
+            started_at=started_at,
             config=self.config,
             logger=self.logger,
         )
@@ -624,6 +625,7 @@ def _build_run_logger(
     *,
     run_id: str,
     script: str,
+    started_at: datetime,
     config: SAPHiveConfig,
     logger: Logger | None,
 ) -> tuple[Logger, Path | None]:
@@ -632,7 +634,7 @@ def _build_run_logger(
 
     logs_dir = config.logging.directory
     logs_dir.mkdir(parents=True, exist_ok=True)
-    logs_path = logs_dir / f"{run_id}.log"
+    logs_path = logs_dir / f"{_log_filename_timestamp(started_at)}_{run_id}.log"
     run_logger = logging.getLogger(f"saphive.run.{run_id}")
     run_logger.setLevel(config.logging.level)
     run_logger.propagate = False
@@ -644,8 +646,13 @@ def _build_run_logger(
     else:
         handler.setFormatter(ContextFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
     run_logger.addHandler(handler)
+    print(f"SAPHive log file: {logs_path}", flush=True)
     run_logger.info("Logger initialized", extra={"script": script, "run_id": run_id})
     return run_logger, logs_path
+
+
+def _log_filename_timestamp(value: datetime) -> str:
+    return value.astimezone(UTC).strftime("%Y%m%dT%H%M%S_%fZ")
 
 
 class ContextFormatter(logging.Formatter):

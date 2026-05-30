@@ -1,3 +1,4 @@
+import re
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -334,7 +335,10 @@ def test_runtime_keeps_com_initialized_while_sap_script_runs(
     assert events == ["init", "resolve", "sap", "close_created_sessions", "uninit"]
 
 
-def test_runtime_includes_log_path_in_result(tmp_path: Path) -> None:
+def test_runtime_includes_log_path_in_result(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     script_path = tmp_path / "logged_script.py"
     logs_dir = tmp_path / "logs"
     _write_script(
@@ -348,8 +352,11 @@ def test_runtime_includes_log_path_in_result(tmp_path: Path) -> None:
     result = runtime.run_script(script_path, run_id="run-logs")
 
     assert result.status is ExecutionStatus.SUCCESS
-    assert result.logs_path == logs_dir / "run-logs.log"
+    assert result.logs_path is not None
+    assert result.logs_path.parent == logs_dir
+    assert re.fullmatch(r"\d{8}T\d{6}_\d{6}Z_run-logs\.log", result.logs_path.name)
     assert result.logs_path.is_file()
+    assert f"SAPHive log file: {result.logs_path}" in capsys.readouterr().out
 
 
 def test_runtime_debug_log_includes_failure_details_and_traceback(tmp_path: Path) -> None:
