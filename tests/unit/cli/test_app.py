@@ -1,9 +1,16 @@
+import os
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from saphive import SapCleanupMode
-from saphive.cli.app import VALIDATION_FAILED_EXIT_CODE, _load_cli_config, app
+from saphive.cli.app import (
+    VALIDATION_FAILED_EXIT_CODE,
+    _load_cli_config,
+    _load_cli_environment,
+    app,
+)
 
 runner = CliRunner()
 EXPLICIT_TIMEOUT_SECONDS = 240
@@ -176,6 +183,27 @@ def test_cli_loads_config_from_os_config_directory(tmp_path: Path) -> None:
 
     assert resolved_path == config_path
     assert config.runtime.default_timeout_seconds == OS_CONFIG_TIMEOUT_SECONDS
+
+
+def test_cli_loads_script_env_file_into_process_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script_dir = tmp_path / "script-dir"
+    script_dir.mkdir()
+    env_path = script_dir / ".env"
+    env_path.write_text(
+        "SAPHIVE_TEST_ENV=loaded\nSAPHIVE_EXISTING_ENV=from-dotenv\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("SAPHIVE_TEST_ENV", raising=False)
+    monkeypatch.setenv("SAPHIVE_EXISTING_ENV", "from-shell")
+
+    loaded_paths = _load_cli_environment(script_path=script_dir / "bot.py")
+
+    assert loaded_paths == (env_path.resolve(),)
+    assert os.environ["SAPHIVE_TEST_ENV"] == "loaded"
+    assert os.environ["SAPHIVE_EXISTING_ENV"] == "from-shell"
 
 
 def test_cli_returns_validation_exit_code_for_validation_failure(tmp_path: Path) -> None:

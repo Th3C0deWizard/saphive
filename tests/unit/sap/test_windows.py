@@ -350,6 +350,38 @@ def test_windows_open_connection_keeps_opened_connection_after_login() -> None:
     assert application.login_session.login_pressed is True
 
 
+def test_windows_opened_connection_reuses_initial_session_once_and_tracks_cleanup() -> None:
+    opened_connection = FakeConnection(description="PRD", sessions=[])
+    initial_session = GrowingComSession(opened_connection.Children)
+    opened_connection.Children._values.append(initial_session)
+    opened_connection.Children.Count = 1
+    application = FakeOpenApplication(
+        connections=[opened_connection],
+        opened_connection=opened_connection,
+    )
+
+    def dispatch(name: str) -> FakeApplication:
+        assert name == "SAPGUI"
+        return application
+
+    sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).open_connection(
+        "prd",
+        SapConnectionProfile(sap_logon_name="PRD", client="300", language="ES"),
+        SimpleNamespace(username="INV10018", password="secret"),
+    )
+
+    first_session = sap_connection.create_session()
+    second_session = sap_connection.create_session()
+    sap_connection.close_created_sessions()
+
+    assert first_session.session is initial_session
+    assert second_session.session is not initial_session
+    assert initial_session.created_sessions == 1
+    assert initial_session.closed_sessions == 1
+    assert second_session.session.closed_sessions == 1
+    assert sap_connection.created_sessions == []
+
+
 def test_windows_connection_fails_when_com_was_uninitialized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -144,6 +144,7 @@ class WindowsSapConnection:
     profile: Any = field(default=None, repr=False, compare=False)
     opened_by_saphive: bool = False
     initial_session: Any | None = field(default=None, repr=False, compare=False)
+    initial_session_claimed: bool = field(default=False, repr=False, compare=False)
     created_sessions: list["WindowsSapSession"] = field(default_factory=list, repr=False)
 
     def list_sessions(self) -> tuple["WindowsSapSession", ...]:
@@ -177,12 +178,29 @@ class WindowsSapConnection:
 
     def create_session(self) -> "WindowsSapSession":
         try:
+            if self.opened_by_saphive and self.initial_session is not None:
+                initial_session = self.with_connection(self._claim_initial_session)
+                if initial_session is not None:
+                    return initial_session
+
             return self.with_connection(self._create_session)
         except Exception as exc:
             raise SapSessionError(
                 "SAPHive could not create SAP GUI session.",
                 details={"connection": self.connection_name, "error": str(exc)},
             ) from exc
+
+    def _claim_initial_session(self, connection: Any) -> "WindowsSapSession | None":
+        if self.initial_session_claimed or not _connection_contains_session(
+            connection,
+            self.initial_session,
+        ):
+            return None
+
+        object.__setattr__(self, "initial_session_claimed", True)
+        session = self._wrap_session(self.initial_session, 0)
+        self.created_sessions.append(session)
+        return session
 
     def with_connection(self, callback: Callable[[Any], T]) -> T:
         return callback(self.connection)
@@ -552,6 +570,17 @@ def _connection_matches(connection: Any, profile: Any) -> bool:
 def _connection_sessions(connection: Any) -> tuple[Any, ...]:
     session_count = int(connection.Children.Count)
     return tuple(connection.Children(index) for index in range(session_count))
+
+
+def _connection_contains_session(connection: Any, session: Any) -> bool:
+    session_identity = _session_identity(session)
+    for current_session in _connection_sessions(connection):
+        if current_session is session:
+            return True
+        if session_identity is not None and _session_identity(current_session) == session_identity:
+            return True
+
+    return False
 
 
 def _wait_for_connection_sessions(

@@ -209,6 +209,7 @@ def _build_runtime(
 ) -> SapRuntime:
     try:
         config, resolved_config_path = _load_cli_config(config_path, script_path=script_path)
+        _load_cli_environment(config_path=resolved_config_path, script_path=script_path)
     except ConfigurationError as exc:
         _exit_with_error(exc)
 
@@ -221,6 +222,47 @@ def _build_runtime(
         sap_cleanup=sap_cleanup,
         sap_cleanup_force=sap_cleanup_force,
     )
+
+
+def _load_cli_environment(
+    *,
+    config_path: Path | None = None,
+    script_path: Path | None = None,
+) -> tuple[Path, ...]:
+    try:
+        from dotenv import find_dotenv, load_dotenv
+    except ImportError as exc:
+        raise ConfigurationError(
+            "SAPHive CLI requires python-dotenv to load .env files.",
+            details={"missing_dependency": "python-dotenv"},
+        ) from exc
+
+    candidates: list[Path] = []
+    if script_path is not None:
+        candidates.append(_script_env_path(script_path))
+    if config_path is not None:
+        candidates.append(config_path.parent / ".env")
+
+    discovered = find_dotenv(usecwd=True)
+    if discovered:
+        candidates.append(Path(discovered))
+
+    loaded_paths: list[Path] = []
+    seen_paths: set[Path] = set()
+    for candidate in candidates:
+        path = candidate.resolve()
+        if path in seen_paths or not path.is_file():
+            continue
+
+        seen_paths.add(path)
+        load_dotenv(path, override=False)
+        loaded_paths.append(path)
+
+    return tuple(loaded_paths)
+
+
+def _script_env_path(script_path: Path) -> Path:
+    return (script_path if script_path.is_dir() else script_path.parent) / ".env"
 
 
 def _load_cli_config(
