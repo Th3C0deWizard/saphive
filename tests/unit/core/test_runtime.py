@@ -474,6 +474,111 @@ def test_runtime_fatal_error_runs_cleanup_and_sap_cleanup(tmp_path: Path) -> Non
     assert sap_connection.cleanup_operations == ["close_created_sessions"]
 
 
+def test_runtime_does_not_retry_sap_connection_loss_without_bot_constant(tmp_path: Path) -> None:
+    script_path = tmp_path / "sap_loss_no_retry.py"
+    _write_script(
+        script_path,
+        "sap_loss_no_retry",
+        validate_body='ctx.set_output("validated", True)',
+        run_body=(
+            'ctx.sap.create_session()\n'
+            '    raise SapInfrastructureError("object invoked has disconnected")'
+        ),
+        imports="from saphive import SapInfrastructureError",
+    )
+    resolver = InMemorySapConnectionResolver()
+    runtime = SapRuntime(config=_sap_config(), connection_resolver=resolver)
+
+    result = runtime.run_script(script_path)
+
+    assert result.status is ExecutionStatus.FAILED
+    assert result.error == "object invoked has disconnected"
+    assert resolver.resolved_modes == [SapConnectionMode.AUTO]
+    assert resolver.connection.cleanup_operations == ["close_created_sessions"]
+
+
+@pytest.mark.parametrize("mode", (SapConnectionMode.OPEN, SapConnectionMode.AUTO))
+def test_runtime_retries_sap_connection_loss_and_fully_cleans_open_modes(
+    tmp_path: Path,
+    mode: SapConnectionMode,
+) -> None:
+    script_path = tmp_path / f"sap_retry_{mode.value}.py"
+    _write_script(
+        script_path,
+        f"sap_retry_{mode.value.replace('-', '_')}",
+        validate_body='ctx.set_output("validated", True)',
+        run_body=(
+            'global RUN_ATTEMPTS\n'
+            '    RUN_ATTEMPTS += 1\n'
+            '    ctx.set_output("attempt", RUN_ATTEMPTS)\n'
+            '    ctx.sap.create_session()\n'
+            '    if RUN_ATTEMPTS == 1:\n'
+            '        raise SapInfrastructureError("object invoked has disconnected")\n'
+            '    ctx.set_output("ran", True)'
+        ),
+        imports=(
+            "from saphive import SapInfrastructureError\n"
+            "SAP_RECONNECT_RETRIES = 1\n"
+            "SAP_RECONNECT_DELAY_SECONDS = 0\n"
+            "RUN_ATTEMPTS = 0"
+        ),
+    )
+    config = _sap_config_with_mode(mode)
+    resolver = InMemorySapConnectionResolver()
+    runtime = SapRuntime(config=config, connection_resolver=resolver)
+
+    result = runtime.run_script(script_path)
+
+    assert result.status is ExecutionStatus.SUCCESS
+    assert result.outputs == {"validated": True, "attempt": 2, "ran": True}
+    assert resolver.resolved_modes == [mode, mode]
+    assert resolver.connection.cleanup_operations == [
+        "close_created_sessions",
+        "close_connection",
+        "close_created_sessions",
+    ]
+
+
+def test_runtime_retries_sap_connection_loss_by_reattaching_in_attach_mode(
+    tmp_path: Path,
+) -> None:
+    script_path = tmp_path / "sap_retry_attach.py"
+    _write_script(
+        script_path,
+        "sap_retry_attach",
+        validate_body='ctx.set_output("validated", True)',
+        run_body=(
+            'global RUN_ATTEMPTS\n'
+            '    RUN_ATTEMPTS += 1\n'
+            '    ctx.sap.create_session()\n'
+            '    if RUN_ATTEMPTS == 1:\n'
+            '        raise SapInfrastructureError("object invoked has disconnected")\n'
+            '    ctx.set_output("attempt", RUN_ATTEMPTS)'
+        ),
+        imports=(
+            "from saphive import SapInfrastructureError\n"
+            "SAP_RECONNECT_RETRIES = 1\n"
+            "SAP_RECONNECT_DELAY_SECONDS = 0\n"
+            "RUN_ATTEMPTS = 0"
+        ),
+    )
+    resolver = InMemorySapConnectionResolver()
+    runtime = SapRuntime(
+        config=_sap_config_with_mode(SapConnectionMode.ATTACH),
+        connection_resolver=resolver,
+    )
+
+    result = runtime.run_script(script_path)
+
+    assert result.status is ExecutionStatus.SUCCESS
+    assert result.outputs == {"validated": True, "attempt": 2}
+    assert resolver.resolved_modes == [SapConnectionMode.ATTACH, SapConnectionMode.ATTACH]
+    assert resolver.connection.cleanup_operations == [
+        "close_created_sessions",
+        "close_created_sessions",
+    ]
+
+
 def test_runtime_context_exposes_com_guard(tmp_path: Path) -> None:
     script_path = tmp_path / "com_guard.py"
     _write_script(
@@ -525,6 +630,11 @@ def _sap_config() -> SAPHiveConfig:
             connections={"prd": SapConnectionProfile(sap_logon_name="PRD", client="100")},
         )
     )
+
+
+def _sap_config_with_mode(mode: SapConnectionMode) -> SAPHiveConfig:
+    config = _sap_config()
+    return config.model_copy(update={"sap": config.sap.model_copy(update={"mode": mode})})
 
 
 class EventRecordingSapResolver:
