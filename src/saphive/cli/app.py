@@ -1,10 +1,12 @@
 """Command-line frontend for SAPHive."""
 
+import json
 from pathlib import Path
 from typing import Annotated
 from uuid import uuid4
 
 import typer
+from dotenv import find_dotenv, load_dotenv
 
 from saphive.core import (
     ConfigurationError,
@@ -45,6 +47,23 @@ InputOption = Annotated[
         "--input",
         "-i",
         help="Runtime input as KEY=VALUE. Can be provided multiple times.",
+    ),
+]
+InputJsonOption = Annotated[
+    str | None,
+    typer.Option(
+        "--input-json",
+        help="Runtime input as a JSON object.",
+    ),
+]
+InputFileOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--input-file",
+        help="Path to a JSON file containing runtime input.",
+        exists=True,
+        dir_okay=False,
+        readable=True,
     ),
 ]
 SapModeOption = Annotated[
@@ -96,7 +115,7 @@ def list_scripts(config: ConfigOption = None) -> None:
         raise typer.Exit(SUCCESS_EXIT_CODE)
 
     for entry in entries:
-        typer.echo(f"{entry.name}\t{entry.metadata.description}\t{entry.source_path}")
+        typer.echo(f"{entry.name}\t{entry.bot.description}\t{entry.source_path}")
 
 
 @scripts_app.command("inspect")
@@ -108,17 +127,21 @@ def inspect_script(script_name: str, config: ConfigOption = None) -> None:
     except SAPHiveError as exc:
         _exit_with_error(exc)
 
-    metadata = entry.metadata
-    typer.echo(f"name: {metadata.name}")
-    typer.echo(f"description: {metadata.description}")
+    bot = entry.bot
+    typer.echo(f"name: {bot.name}")
+    typer.echo(f"description: {bot.description}")
     typer.echo(f"path: {entry.source_path}")
     typer.echo(f"source_kind: {entry.source_kind.value}")
-    if metadata.version is not None:
-        typer.echo(f"version: {metadata.version}")
-    if metadata.author is not None:
-        typer.echo(f"author: {metadata.author}")
-    if metadata.tags:
-        typer.echo(f"tags: {', '.join(metadata.tags)}")
+    if bot.version is not None:
+        typer.echo(f"version: {bot.version}")
+    if bot.author is not None:
+        typer.echo(f"author: {bot.author}")
+    if bot.tags:
+        typer.echo(f"tags: {', '.join(bot.tags)}")
+    typer.echo("input_schema:")
+    typer.echo(json.dumps(bot.input_model.model_json_schema(), indent=2, ensure_ascii=False))
+    typer.echo("output_schema:")
+    typer.echo(json.dumps(bot.output_model.model_json_schema(), indent=2, ensure_ascii=False))
 
 
 @scripts_app.command("validate")
@@ -126,13 +149,15 @@ def validate_named_script(
     script_name: str,
     config: ConfigOption = None,
     inputs: InputOption = None,
+    input_json: InputJsonOption = None,
+    input_file: InputFileOption = None,
     sap_mode: SapModeOption = None,
     sap_connection: SapConnectionOption = None,
     sap_auth_file: SapAuthFileOption = None,
 ) -> None:
     """Validate a discovered SAPHive script."""
     runtime = _build_runtime(config, sap_mode, sap_connection, sap_auth_file)
-    result = runtime.validate_script(script_name, inputs=_parse_inputs(inputs))
+    result = runtime.validate_bot(script_name, inputs=_parse_inputs(inputs, input_json, input_file))
     _print_result(result)
     raise typer.Exit(_exit_code_for_result(result))
 
@@ -142,6 +167,8 @@ def run_named_script(
     script_name: str,
     config: ConfigOption = None,
     inputs: InputOption = None,
+    input_json: InputJsonOption = None,
+    input_file: InputFileOption = None,
     sap_mode: SapModeOption = None,
     sap_connection: SapConnectionOption = None,
     sap_auth_file: SapAuthFileOption = None,
@@ -159,7 +186,11 @@ def run_named_script(
     )
     run_id = uuid4().hex
     typer.echo(f"run_id: {run_id}")
-    result = runtime.run_script(script_name, inputs=_parse_inputs(inputs), run_id=run_id)
+    result = runtime.run_bot(
+        script_name,
+        inputs=_parse_inputs(inputs, input_json, input_file),
+        run_id=run_id,
+    )
     _print_result(result, include_run_id=False)
     raise typer.Exit(_exit_code_for_result(result))
 
@@ -169,6 +200,8 @@ def run_script_path(
     script_path: Path,
     config: ConfigOption = None,
     inputs: InputOption = None,
+    input_json: InputJsonOption = None,
+    input_file: InputFileOption = None,
     sap_mode: SapModeOption = None,
     sap_connection: SapConnectionOption = None,
     sap_auth_file: SapAuthFileOption = None,
@@ -187,7 +220,11 @@ def run_script_path(
     )
     run_id = uuid4().hex
     typer.echo(f"run_id: {run_id}")
-    result = runtime.run_script(script_path, inputs=_parse_inputs(inputs), run_id=run_id)
+    result = runtime.run_bot(
+        script_path,
+        inputs=_parse_inputs(inputs, input_json, input_file),
+        run_id=run_id,
+    )
     _print_result(result, include_run_id=False)
     raise typer.Exit(_exit_code_for_result(result))
 
@@ -229,14 +266,6 @@ def _load_cli_environment(
     config_path: Path | None = None,
     script_path: Path | None = None,
 ) -> tuple[Path, ...]:
-    try:
-        from dotenv import find_dotenv, load_dotenv
-    except ImportError as exc:
-        raise ConfigurationError(
-            "SAPHive CLI requires python-dotenv to load .env files.",
-            details={"missing_dependency": "python-dotenv"},
-        ) from exc
-
     candidates: list[Path] = []
     if script_path is not None:
         candidates.append(_script_env_path(script_path))
@@ -281,8 +310,16 @@ def _load_cli_config(
     return load_config(default_config_path), default_config_path
 
 
-def _parse_inputs(raw_inputs: list[str] | None) -> dict[str, object]:
+def _parse_inputs(
+    raw_inputs: list[str] | None,
+    input_json: str | None = None,
+    input_file: Path | None = None,
+) -> dict[str, object]:
     inputs: dict[str, object] = {}
+    if input_file is not None:
+        inputs.update(_json_object(input_file.read_text(encoding="utf-8"), source=str(input_file)))
+    if input_json is not None:
+        inputs.update(_json_object(input_json, source="--input-json"))
     for raw_input in raw_inputs or []:
         key, separator, value = raw_input.partition("=")
         if separator == "" or key.strip() == "":
@@ -291,6 +328,16 @@ def _parse_inputs(raw_inputs: list[str] | None) -> dict[str, object]:
         inputs[key] = value
 
     return inputs
+
+
+def _json_object(raw_value: str, *, source: str) -> dict[str, object]:
+    try:
+        value = json.loads(raw_value)
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter(f"{source} must be valid JSON.") from exc
+    if not isinstance(value, dict):
+        raise typer.BadParameter(f"{source} must contain a JSON object.")
+    return value
 
 
 def _print_result(result: ScriptExecutionResult, *, include_run_id: bool = True) -> None:

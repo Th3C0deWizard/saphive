@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from saphive import SapConnectionError, SapConnectionProfile, SapGuiError, SapSessionError
-from saphive.sap import WindowsSapGuiClient, WindowsSapSession
+from saphive.sap import SapCredentials, WindowsSapGuiClient, WindowsSapSession
 from saphive.sap.windows import _load_dispatch_factory
 
 
@@ -322,7 +322,7 @@ def test_windows_opened_connection_does_not_fallback_when_connection_loses_sessi
     sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).open_connection(
         "prd",
         SapConnectionProfile(sap_logon_name="PRD", client="300", language="ES"),
-        SimpleNamespace(username="INV10018", password="secret"),
+        SapCredentials(username="INV10018", password="secret"),
     )
     opened_connection.Children = FakeChildren([])
 
@@ -342,7 +342,7 @@ def test_windows_open_connection_keeps_opened_connection_after_login() -> None:
     sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).open_connection(
         "prd",
         SapConnectionProfile(sap_logon_name="PRD", client="300", language="ES"),
-        SimpleNamespace(username="INV10018", password="secret"),
+        SapCredentials(username="INV10018", password="secret"),
     )
 
     assert sap_connection.connection is application.login_connection
@@ -367,7 +367,7 @@ def test_windows_opened_connection_reuses_initial_session_once_and_tracks_cleanu
     sap_connection = WindowsSapGuiClient(dispatch_factory=dispatch).open_connection(
         "prd",
         SapConnectionProfile(sap_logon_name="PRD", client="300", language="ES"),
-        SimpleNamespace(username="INV10018", password="secret"),
+        SapCredentials(username="INV10018", password="secret"),
     )
 
     first_session = sap_connection.create_session()
@@ -602,7 +602,7 @@ class ReplacingLoginApplication(FakeApplication):
 
 
 class FakeConnection:
-    def __init__(self, description: str, sessions: list["FakeComSession"]) -> None:
+    def __init__(self, description: str, sessions: list[Any]) -> None:
         self.Description = description
         self.Children = FakeChildren(sessions)
 

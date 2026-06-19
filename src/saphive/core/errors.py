@@ -56,8 +56,8 @@ class ScriptLoadError(SAPHiveError):
     """Raised when SAPHive cannot load an automation script."""
 
 
-class ScriptContractError(SAPHiveError):
-    """Raised when an automation script does not match the SAPHive contract."""
+class BotContractError(SAPHiveError):
+    """Raised when a SAPHive bot does not match the Bot contract."""
 
 
 class ScriptValidationError(SAPHiveError):

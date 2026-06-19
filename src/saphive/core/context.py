@@ -5,9 +5,9 @@ from logging import Logger, getLogger
 from pathlib import Path
 from uuid import uuid4
 
+from saphive.bot import Bot
 from saphive.core.com import ComRuntime
 from saphive.core.config import SAPHiveConfig
-from saphive.core.metadata import ScriptMetadata
 from saphive.sap.interfaces import SapConnection, SapGuiPlaceholder
 
 
@@ -24,7 +24,7 @@ class RuntimePaths:
 class SapContext:
     """Initial SAPHive runtime context shared with automation scripts."""
 
-    script: ScriptMetadata
+    bot: Bot
     run_id: str
     workdir: Path
     paths: RuntimePaths
@@ -42,7 +42,7 @@ class SapContext:
 
 def build_sap_context(
     *,
-    script: ScriptMetadata,
+    bot: Bot,
     config: SAPHiveConfig | None = None,
     inputs: dict[str, object] | None = None,
     run_id: str | None = None,
@@ -60,10 +60,10 @@ def build_sap_context(
         logs_dir=resolved_config.logging.directory,
         run_dir=resolved_workdir / ".saphive" / "runs" / resolved_run_id,
     )
-    resolved_logger = logger or getLogger(f"saphive.{script.name}.{resolved_run_id}")
+    resolved_logger = logger or getLogger(f"saphive.{bot.name}.{resolved_run_id}")
 
     return SapContext(
-        script=script,
+        bot=bot,
         run_id=resolved_run_id,
         workdir=resolved_workdir,
         paths=runtime_paths,

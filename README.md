@@ -1,13 +1,13 @@
 # SAPHive
 
-SAPHive is a lightweight Python runtime and SDK for SAP GUI Scripting automation. It discovers, validates, and executes external SAPHive automation scripts while keeping SAP connection resolution, logging, configuration, and error handling in Core.
+SAPHive is a lightweight Python runtime and SDK for SAP GUI Scripting automation. It discovers, validates, and executes typed SAPHive bots while keeping SAP connection resolution, logging, configuration, and error handling in Core.
 
 ## Status
 
 SAPHive is pre-alpha internal software. The current implementation includes:
 
-- A typed Core runtime and script contract.
-- Static script discovery, loading, validation, and execution.
+- A typed Core runtime and Bot contract.
+- Import-based Bot discovery, loading, validation, and execution.
 - A Typer CLI exposed as `saphive`.
 - SAP connection modes: `auto`, `attach`, and `open`.
 - Connection-scoped script APIs through `ctx.sap`.
@@ -35,7 +35,7 @@ Run checks:
 ```bash
 ./venv/Scripts/python.exe -m saphive scripts list --config examples/scripts/saphive.toml
 ./venv/Scripts/python.exe -m saphive scripts validate create_sessions --config examples/scripts/saphive.toml
-./venv/Scripts/python.exe -m saphive scripts run create_sessions --config examples/scripts/saphive.toml
+./venv/Scripts/python.exe -m saphive scripts run create_sessions --config examples/scripts/saphive.toml --input-json '{"transaction":"IW32"}'
 ```
 
 On Windows runtime machines, prefer:
@@ -97,27 +97,42 @@ Use `--sap-cleanup` to change the policy:
 Connection cleanup only closes connections opened by SAPHive. Add `--sap-cleanup-force` to close
 an attached/pre-existing connection intentionally.
 
-## Script Contract
+## Bot Contract
 
 ```python
-from saphive import SapContext
+from pydantic import BaseModel
 
-SCRIPT_NAME = "create_sessions"
-DESCRIPTION = "Create SAP GUI sessions inside the selected connection."
+from saphive import SapContext, bot
 
-def validate(ctx: SapContext) -> None:
-    pass
+class CreateSessionsInput(BaseModel):
+    transaction: str = "IW32"
 
-def run(ctx: SapContext) -> None:
+class CreateSessionsOutput(BaseModel):
+    transaction: str
+
+@bot(
+    name="create_sessions",
+    description="Create SAP GUI sessions inside the selected connection.",
+    input_model=CreateSessionsInput,
+    output_model=CreateSessionsOutput,
+)
+def run(ctx: SapContext, data: CreateSessionsInput) -> CreateSessionsOutput:
     session = ctx.sap.create_session()
-    ctx.set_output("connection", ctx.sap.connection_name)
-    session.start_transaction("IW21")
-
-def cleanup(ctx: SapContext) -> None:
-    pass
+    session.start_transaction(data.transaction)
+    return CreateSessionsOutput(transaction=data.transaction)
 ```
 
-Scripts should not choose or open SAP connections directly. Core/CLI selects the connection, and scripts manage sessions only through `ctx.sap`.
+Bots should not choose or open SAP connections directly. Core/CLI selects the connection, and bots manage sessions only through `ctx.sap`.
 For independent bots sharing one SAP connection, create one dedicated session with `ctx.sap.create_session()`, run all automation through the returned session object, and let the default `created-sessions` cleanup close it after the run.
 Use `ctx.sap.attach_session(index=...)` only when intentionally taking control of an existing session.
-When a script needs a raw SAP GUI connection COM operation, use `ctx.sap.with_connection(...)`; SAPHive does not retry, rebind, or recover COM proxies automatically.
+When a bot needs a raw SAP GUI connection COM operation, use `ctx.sap.with_connection(...)`; SAPHive does not retry, rebind, or recover COM proxies automatically.
+
+Python services can import and execute bots directly:
+
+```python
+from saphive import SapRuntime
+from my_project.bots import create_sessions
+
+runtime = SapRuntime(...)
+result = runtime.run_bot(create_sessions.BOT, inputs={"transaction": "IW32"})
+```

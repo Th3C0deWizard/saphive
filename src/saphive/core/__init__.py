@@ -19,6 +19,7 @@ from saphive.core.config import (
 from saphive.core.context import RuntimePaths, SapContext, build_sap_context
 from saphive.core.errors import (
     AutomationError,
+    BotContractError,
     BusinessAutomationError,
     ComRuntimeError,
     ConfigurationError,
@@ -31,19 +32,18 @@ from saphive.core.errors import (
     SAPHiveError,
     SapInfrastructureError,
     SapSessionError,
-    ScriptContractError,
     ScriptDiscoveryError,
     ScriptExecutionError,
     ScriptLoadError,
     ScriptValidationError,
 )
-from saphive.core.metadata import ScriptMetadata
 from saphive.core.results import ExecutionStatus, ScriptExecutionResult
 from saphive.core.runtime import SapRuntime
 from saphive.sap.interfaces import SapGuiPlaceholder
 
 __all__ = [
     "AutomationError",
+    "BotContractError",
     "BusinessAutomationError",
     "ComRuntime",
     "ComRuntimeError",
@@ -70,12 +70,10 @@ __all__ = [
     "SapInfrastructureError",
     "SapRuntime",
     "SapSessionError",
-    "ScriptContractError",
     "ScriptDiscoveryError",
     "ScriptExecutionError",
     "ScriptExecutionResult",
     "ScriptLoadError",
-    "ScriptMetadata",
     "ScriptValidationError",
     "build_sap_context",
     "default_cli_config_dir",

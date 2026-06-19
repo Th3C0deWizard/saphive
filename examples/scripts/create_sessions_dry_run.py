@@ -1,15 +1,27 @@
 """Dry-run example for running a bot in its own SAP GUI session."""
 
-from saphive import SapContext
+from pydantic import BaseModel
 
-SCRIPT_NAME = "create_sessions"
-DESCRIPTION = "Example that shows how to create a dedicated SAP GUI session"
-VERSION = "0.1.0"
-AUTHOR = "SAPHive Examples"
+from saphive import SapContext, bot
 
-def validate(ctx: SapContext) -> None:
-    pass
 
-def run(ctx: SapContext) -> None:
+class CreateSessionsInput(BaseModel):
+    transaction: str = "IW32"
+
+
+class CreateSessionsOutput(BaseModel):
+    transaction: str
+
+
+@bot(
+    name="create_sessions",
+    description="Example that shows how to create a dedicated SAP GUI session",
+    input_model=CreateSessionsInput,
+    output_model=CreateSessionsOutput,
+    version="0.2.0",
+    author="SAPHive Examples",
+)
+def run(ctx: SapContext, data: CreateSessionsInput) -> CreateSessionsOutput:
     session = ctx.sap.create_session()
-    session.start_transaction("IW32")
+    session.start_transaction(data.transaction)
+    return CreateSessionsOutput(transaction=data.transaction)

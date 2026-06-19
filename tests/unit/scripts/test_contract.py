@@ -1,229 +1,113 @@
-from pathlib import Path
 from types import ModuleType
 
 import pytest
+from pydantic import BaseModel
 
-from saphive import SapContext, ScriptContractError
-from saphive.scripts import (
-    REQUIRED_FUNCTION_ATTRIBUTES,
-    REQUIRED_METADATA_ATTRIBUTES,
-    ScriptContract,
-    extract_script_metadata,
-    validate_script_contract,
-)
-
-EXPECTED_REQUIRED_FUNCTIONS = ("validate", "run")
-EXPECTED_REQUIRED_METADATA = ("SCRIPT_NAME", "DESCRIPTION")
+from saphive import Bot, BotContractError, SapContext, bot
+from saphive.bot import bot_from_module, get_decorated_bot, validate_bot_contract
 
 
-def test_required_contract_constants_are_public() -> None:
-    assert REQUIRED_FUNCTION_ATTRIBUTES == EXPECTED_REQUIRED_FUNCTIONS
-    assert REQUIRED_METADATA_ATTRIBUTES == EXPECTED_REQUIRED_METADATA
+class Input(BaseModel):
+    value: str
 
 
-def test_validate_script_contract_returns_contract_and_metadata() -> None:
-    module = _valid_script_module()
-    script_path = Path("automations/create_notifications.py")
-
-    contract = validate_script_contract(module, path=script_path)
-
-    assert isinstance(contract, ScriptContract)
-    assert contract.metadata.name == "create_notifications"
-    assert contract.metadata.description == "Create SAP maintenance notifications."
-    assert contract.metadata.path == script_path
-    assert contract.metadata.version == "0.1.0"
-    assert contract.metadata.author == "Maintenance Team"
-    assert contract.metadata.tags == ("maintenance", "notifications")
-    assert contract.cleanup is None
+class Output(BaseModel):
+    result: str
 
 
-def test_validate_script_contract_accepts_optional_cleanup() -> None:
-    module = _valid_script_module()
+def test_bot_contract_accepts_valid_bot() -> None:
+    instance = Bot(
+        name="create_notifications",
+        description="Create SAP maintenance notifications.",
+        input_model=Input,
+        output_model=Output,
+        run=_run,
+        version="0.1.0",
+        author="Maintenance Team",
+        tags=("maintenance",),
+    )
 
-    def cleanup(ctx: SapContext) -> None:
-        return None
-
-    module.__dict__["cleanup"] = cleanup
-
-    contract = validate_script_contract(module)
-
-    assert contract.cleanup is cleanup
-
-
-def test_extract_script_metadata_returns_only_metadata() -> None:
-    metadata = extract_script_metadata(_valid_script_module())
-
-    assert metadata.name == "create_notifications"
-    assert metadata.description == "Create SAP maintenance notifications."
+    validate_bot_contract(instance)
 
 
-def test_contract_validation_does_not_execute_script_functions() -> None:
-    module = _base_module()
+def test_bot_decorator_attaches_bot_to_function() -> None:
+    @bot(name="decorated", description="Decorated bot.", input_model=Input, output_model=Output)
+    def run(ctx: SapContext, data: Input) -> Output:
+        return Output(result=data.value)
 
-    def validate(ctx: SapContext) -> None:
-        raise AssertionError("validate should not be executed")
+    instance = get_decorated_bot(run)
 
-    def run(ctx: SapContext) -> None:
-        raise AssertionError("run should not be executed")
+    assert instance is not None
+    assert instance.name == "decorated"
+    assert instance.run is run
 
-    module.__dict__["validate"] = validate
+
+def test_bot_from_module_accepts_explicit_bot() -> None:
+    module = ModuleType("explicit_bot")
+    instance = Bot(
+        name="explicit",
+        description="Explicit bot.",
+        input_model=Input,
+        output_model=Output,
+        run=_run,
+    )
+    module.__dict__["BOT"] = instance
+
+    assert bot_from_module(module) is instance
+
+
+def test_bot_from_module_accepts_decorated_run_function() -> None:
+    module = ModuleType("decorated_module")
+
+    @bot(
+        name="decorated_module",
+        description="Decorated module.",
+        input_model=Input,
+        output_model=Output,
+    )
+    def run(ctx: SapContext, data: Input) -> Output:
+        return Output(result=data.value)
+
     module.__dict__["run"] = run
 
-    contract = validate_script_contract(module)
-
-    assert contract.metadata.name == "create_notifications"
+    assert bot_from_module(module).name == "decorated_module"
 
 
-@pytest.mark.parametrize("attribute_name", ["SCRIPT_NAME", "DESCRIPTION"])
-def test_contract_requires_non_empty_metadata_attributes(attribute_name: str) -> None:
-    module = _valid_script_module()
-    setattr(module, attribute_name, "")
+def test_bot_contract_rejects_missing_bot() -> None:
+    module = ModuleType("missing_bot")
 
-    with pytest.raises(ScriptContractError, match="non-empty string") as exc_info:
-        validate_script_contract(module)
-
-    assert exc_info.value.details["attribute"] == attribute_name
+    with pytest.raises(BotContractError, match="must expose BOT"):
+        bot_from_module(module)
 
 
-@pytest.mark.parametrize("function_name", ["validate", "run"])
-def test_contract_requires_callable_functions(function_name: str) -> None:
-    module = _valid_script_module()
-    setattr(module, function_name, None)
+def test_bot_contract_rejects_invalid_input_model() -> None:
+    instance = Bot(
+        name="invalid_input",
+        description="Invalid input model.",
+        input_model=dict,  # type: ignore[arg-type]
+        output_model=Output,
+        run=_run,
+    )
 
-    with pytest.raises(ScriptContractError, match="requires a callable") as exc_info:
-        validate_script_contract(module)
-
-    assert exc_info.value.details["function"] == function_name
-
-
-@pytest.mark.parametrize("function_name", ["validate", "run"])
-def test_contract_rejects_functions_without_ctx(function_name: str) -> None:
-    module = _valid_script_module()
-
-    def invalid_function() -> None:
-        return None
-
-    setattr(module, function_name, invalid_function)
-
-    with pytest.raises(ScriptContractError, match="exactly one ctx"):
-        validate_script_contract(module)
+    with pytest.raises(BotContractError, match="input_model"):
+        validate_bot_contract(instance)
 
 
-def test_contract_rejects_invalid_cleanup_signature() -> None:
-    module = _valid_script_module()
+def test_bot_contract_rejects_invalid_run_signature() -> None:
+    def invalid_run(ctx: SapContext) -> Output:
+        return Output(result="invalid")
 
-    def cleanup() -> None:
-        return None
+    instance = Bot(
+        name="invalid_run",
+        description="Invalid run signature.",
+        input_model=Input,
+        output_model=Output,
+        run=invalid_run,
+    )
 
-    module.__dict__["cleanup"] = cleanup
-
-    with pytest.raises(ScriptContractError, match="exactly one ctx"):
-        validate_script_contract(module)
-
-
-@pytest.mark.parametrize("function_name", ["validate", "run"])
-def test_contract_rejects_functions_with_extra_parameters(function_name: str) -> None:
-    module = _valid_script_module()
-
-    def invalid_function(ctx: SapContext, extra: object) -> None:
-        return None
-
-    setattr(module, function_name, invalid_function)
-
-    with pytest.raises(ScriptContractError, match="exactly one ctx"):
-        validate_script_contract(module)
+    with pytest.raises(BotContractError, match="exactly 2"):
+        validate_bot_contract(instance)
 
 
-@pytest.mark.parametrize("function_name", ["validate", "run"])
-def test_contract_rejects_keyword_only_ctx(function_name: str) -> None:
-    module = _valid_script_module()
-
-    def invalid_function(*, ctx: SapContext) -> None:
-        return None
-
-    setattr(module, function_name, invalid_function)
-
-    with pytest.raises(ScriptContractError, match="positional"):
-        validate_script_contract(module)
-
-
-@pytest.mark.parametrize("function_name", ["validate", "run"])
-def test_contract_rejects_default_ctx(function_name: str) -> None:
-    module = _valid_script_module()
-
-    def invalid_function(ctx: SapContext | None = None) -> None:
-        return None
-
-    setattr(module, function_name, invalid_function)
-
-    with pytest.raises(ScriptContractError, match="default value"):
-        validate_script_contract(module)
-
-
-@pytest.mark.parametrize("function_name", ["validate", "run"])
-def test_contract_rejects_non_none_return_annotation(function_name: str) -> None:
-    module = _valid_script_module()
-
-    def invalid_function(ctx: SapContext) -> str:
-        return "invalid"
-
-    setattr(module, function_name, invalid_function)
-
-    with pytest.raises(ScriptContractError, match="return None"):
-        validate_script_contract(module)
-
-
-def test_contract_rejects_invalid_optional_version() -> None:
-    module = _valid_script_module()
-    module.__dict__["VERSION"] = ""
-
-    with pytest.raises(ScriptContractError, match="VERSION"):
-        validate_script_contract(module)
-
-
-def test_contract_rejects_invalid_optional_author() -> None:
-    module = _valid_script_module()
-    module.__dict__["AUTHOR"] = ""
-
-    with pytest.raises(ScriptContractError, match="AUTHOR"):
-        validate_script_contract(module)
-
-
-def test_contract_rejects_string_tags() -> None:
-    module = _valid_script_module()
-    module.__dict__["TAGS"] = "maintenance"
-
-    with pytest.raises(ScriptContractError, match="TAGS"):
-        validate_script_contract(module)
-
-
-def test_contract_rejects_empty_tags() -> None:
-    module = _valid_script_module()
-    module.__dict__["TAGS"] = ["maintenance", ""]
-
-    with pytest.raises(ScriptContractError, match="TAGS"):
-        validate_script_contract(module)
-
-
-def _valid_script_module() -> ModuleType:
-    module = _base_module()
-
-    def validate(ctx: SapContext) -> None:
-        return None
-
-    def run(ctx: SapContext) -> None:
-        return None
-
-    module.__dict__["validate"] = validate
-    module.__dict__["run"] = run
-    return module
-
-
-def _base_module() -> ModuleType:
-    module = ModuleType("valid_saphive_script")
-    module.__dict__["SCRIPT_NAME"] = "create_notifications"
-    module.__dict__["DESCRIPTION"] = "Create SAP maintenance notifications."
-    module.__dict__["VERSION"] = "0.1.0"
-    module.__dict__["AUTHOR"] = "Maintenance Team"
-    module.__dict__["TAGS"] = ("maintenance", "notifications")
-    return module
+def _run(ctx: SapContext, data: Input) -> Output:
+    return Output(result=data.value)

@@ -56,7 +56,7 @@ def test_cli_scripts_validate_calls_core_runtime(tmp_path: Path) -> None:
     _write_script(
         tmp_path / "validate_me.py",
         "validate_me",
-        validate_body='ctx.set_output("validated", ctx.inputs["order"])',
+        validate_body='ctx.set_output("validated", ctx.inputs["value"])',
     )
     config_path = _write_config(tmp_path)
 
@@ -69,7 +69,7 @@ def test_cli_scripts_validate_calls_core_runtime(tmp_path: Path) -> None:
             "--config",
             str(config_path),
             "--input",
-            "order=4000001",
+            "value=4000001",
         ],
     )
 
@@ -83,7 +83,7 @@ def test_cli_scripts_run_calls_core_runtime(tmp_path: Path) -> None:
         tmp_path / "run_me.py",
         "run_me",
         validate_body='ctx.set_output("validated", True)',
-        run_body='ctx.set_output("ran", True)',
+        run_body='return Output(result="ran")',
     )
     config_path = _write_config(tmp_path)
 
@@ -93,19 +93,19 @@ def test_cli_scripts_run_calls_core_runtime(tmp_path: Path) -> None:
     assert "run_id:" in result.output
     assert "status: success" in result.output
     assert "output.validated: True" in result.output
-    assert "output.ran: True" in result.output
+    assert "output.result: ran" in result.output
 
 
 def test_cli_root_run_accepts_explicit_script_path(tmp_path: Path) -> None:
     script_path = tmp_path / "path_script.py"
-    _write_script(script_path, "path_script", run_body='ctx.set_output("ran_from_path", True)')
+    _write_script(script_path, "path_script", run_body='return Output(result="ran_from_path")')
 
     result = runner.invoke(app, ["run", str(script_path)])
 
     assert result.exit_code == 0
     assert "run_id:" in result.output
     assert "script: path_script" in result.output
-    assert "output.ran_from_path: True" in result.output
+    assert "output.result: ran_from_path" in result.output
 
 
 def test_cli_root_run_loads_config_from_script_directory(tmp_path: Path) -> None:
@@ -115,7 +115,7 @@ def test_cli_root_run_loads_config_from_script_directory(tmp_path: Path) -> None
     _write_script(
         script_path,
         "path_script",
-        run_body='ctx.set_output("timeout", ctx.config.runtime.default_timeout_seconds)',
+        run_body='return Output(result=str(ctx.config.runtime.default_timeout_seconds))',
     )
     (script_dir / "saphive.toml").write_text(
         """
@@ -128,12 +128,12 @@ default_timeout_seconds = 120
     result = runner.invoke(app, ["run", str(script_path)])
 
     assert result.exit_code == 0
-    assert "output.timeout: 120" in result.output
+    assert "output.result: 120" in result.output
 
 
 def test_cli_run_accepts_sap_cleanup_options(tmp_path: Path) -> None:
     script_path = tmp_path / "cleanup_options.py"
-    _write_script(script_path, "cleanup_options", run_body='ctx.set_output("ran", True)')
+    _write_script(script_path, "cleanup_options", run_body='return Output(result="ran")')
 
     result = runner.invoke(
         app,
@@ -232,7 +232,7 @@ def test_cli_returns_failure_for_missing_named_script(tmp_path: Path) -> None:
 
     assert result.exit_code == 1
     assert "status: failed" in result.output
-    assert "error: SAPHive script was not found in the registry." in result.output
+    assert "error: SAPHive bot was not found in the registry." in result.output
 
 
 def test_cli_rejects_invalid_input_format(tmp_path: Path) -> None:
@@ -266,20 +266,32 @@ def _write_script(
     *,
     imports: str = "",
     validate_body: str = "pass",
-    run_body: str = "pass",
+    run_body: str = "return Output(result=data.value)",
 ) -> None:
     path.write_text(
         f'''
+from pydantic import BaseModel
+from saphive import bot
 {imports}
 
-SCRIPT_NAME = "{script_name}"
-DESCRIPTION = "Runtime test script."
-VERSION = "0.1.0"
+class Input(BaseModel):
+    value: str = "ok"
+
+class Output(BaseModel):
+    result: str
 
 def validate(ctx):
     {validate_body}
 
-def run(ctx):
+@bot(
+    name="{script_name}",
+    description="Runtime test script.",
+    input_model=Input,
+    output_model=Output,
+    version="0.1.0",
+    validate=validate,
+)
+def run(ctx, data):
     {run_body}
 '''.strip(),
         encoding="utf-8",

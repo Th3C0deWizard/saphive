@@ -1,7 +1,9 @@
 """SAPHive runtime and SDK package."""
 
+from saphive.bot import Bot, bot
 from saphive.core import (
     AutomationError,
+    BotContractError,
     BusinessAutomationError,
     ComRuntime,
     ComRuntimeError,
@@ -28,12 +30,10 @@ from saphive.core import (
     SapInfrastructureError,
     SapRuntime,
     SapSessionError,
-    ScriptContractError,
     ScriptDiscoveryError,
     ScriptExecutionError,
     ScriptExecutionResult,
     ScriptLoadError,
-    ScriptMetadata,
     ScriptValidationError,
     build_sap_context,
     default_cli_config_dir,
@@ -43,10 +43,12 @@ from saphive.core import (
     load_default_config,
 )
 
-__version__ = "0.1.6"
+__version__ = "0.2.0"
 
 __all__ = [
     "AutomationError",
+    "Bot",
+    "BotContractError",
     "BusinessAutomationError",
     "ComRuntime",
     "ComRuntimeError",
@@ -73,14 +75,13 @@ __all__ = [
     "SapInfrastructureError",
     "SapRuntime",
     "SapSessionError",
-    "ScriptContractError",
     "ScriptDiscoveryError",
     "ScriptExecutionError",
     "ScriptExecutionResult",
     "ScriptLoadError",
-    "ScriptMetadata",
     "ScriptValidationError",
     "__version__",
+    "bot",
     "build_sap_context",
     "default_cli_config_dir",
     "find_cli_config",

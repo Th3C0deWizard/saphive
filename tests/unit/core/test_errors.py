@@ -1,5 +1,6 @@
 from saphive import (
     AutomationError,
+    BotContractError,
     BusinessAutomationError,
     ComRuntimeError,
     ConfigurationError,
@@ -12,7 +13,6 @@ from saphive import (
     SAPHiveError,
     SapInfrastructureError,
     SapSessionError,
-    ScriptContractError,
     ScriptDiscoveryError,
     ScriptExecutionError,
     ScriptLoadError,
@@ -41,7 +41,7 @@ def test_domain_errors_share_base_type() -> None:
         ConfigurationError,
         ScriptDiscoveryError,
         ScriptLoadError,
-        ScriptContractError,
+        BotContractError,
         ScriptValidationError,
         SapConnectionError,
         SapSessionError,

@@ -12,69 +12,67 @@ def test_discover_scripts_returns_empty_registry_for_empty_directory(tmp_path: P
     assert isinstance(registry, ScriptRegistry)
     assert len(registry) == 0
     assert registry.names() == ()
-    assert registry.metadata() == ()
+    assert registry.bots() == ()
 
 
-def test_discover_scripts_finds_single_file_scripts(tmp_path: Path) -> None:
-    script_path = tmp_path / "create_notifications.py"
-    _write_valid_script(script_path, "create_notifications")
+def test_discover_scripts_finds_single_file_bots(tmp_path: Path) -> None:
+    bot_path = tmp_path / "create_notifications.py"
+    _write_valid_bot(bot_path, "create_notifications")
 
     registry = discover_scripts([tmp_path])
     entry = registry.get("create_notifications")
 
     assert registry.names() == ("create_notifications",)
-    assert entry.metadata.name == "create_notifications"
-    assert entry.metadata.description == "Create notifications."
-    assert entry.metadata.path == script_path.resolve()
-    assert entry.metadata.version == "0.1.0"
-    assert entry.metadata.author == "Maintenance Team"
-    assert entry.metadata.tags == ("maintenance", "notifications")
-    assert entry.source_path == script_path.resolve()
-    assert entry.module_path == script_path.resolve()
+    assert entry.bot.name == "create_notifications"
+    assert entry.bot.description == "Create notifications."
+    assert entry.bot.version == "0.1.0"
+    assert entry.bot.author == "Maintenance Team"
+    assert entry.bot.tags == ("maintenance", "notifications")
+    assert entry.source_path == bot_path.resolve()
+    assert entry.module_path == bot_path.resolve()
     assert entry.source_kind is ScriptSourceKind.FILE
 
 
-def test_discover_scripts_finds_package_scripts(tmp_path: Path) -> None:
+def test_discover_scripts_finds_package_bots(tmp_path: Path) -> None:
     package_path = tmp_path / "download_report"
     package_path.mkdir()
     init_path = package_path / "__init__.py"
-    _write_valid_script(init_path, "download_report", description="Download a SAP report.")
+    _write_valid_bot(init_path, "download_report", description="Download a SAP report.")
 
     registry = discover_scripts([tmp_path])
     entry = registry.get("download_report")
 
-    assert entry.metadata.path == package_path.resolve()
     assert entry.source_path == package_path.resolve()
     assert entry.module_path == init_path.resolve()
     assert entry.source_kind is ScriptSourceKind.PACKAGE
 
 
 def test_discover_scripts_sorts_names(tmp_path: Path) -> None:
-    _write_valid_script(tmp_path / "z_script.py", "z_script")
-    _write_valid_script(tmp_path / "a_script.py", "a_script")
+    _write_valid_bot(tmp_path / "z_bot.py", "z_bot")
+    _write_valid_bot(tmp_path / "a_bot.py", "a_bot")
 
     registry = discover_scripts([tmp_path])
 
-    assert registry.names() == ("a_script", "z_script")
+    assert registry.names() == ("a_bot", "z_bot")
 
 
-def test_registry_get_raises_for_missing_script(tmp_path: Path) -> None:
+def test_registry_get_raises_for_missing_bot(tmp_path: Path) -> None:
     registry = discover_scripts([tmp_path])
 
     with pytest.raises(ScriptDiscoveryError, match="not found") as exc_info:
-        registry.get("missing_script")
+        registry.get("missing_bot")
 
-    assert exc_info.value.details == {"script_name": "missing_script"}
+    assert exc_info.value.details == {"bot_name": "missing_bot"}
 
 
 def test_discover_scripts_detects_duplicate_names(tmp_path: Path) -> None:
-    _write_valid_script(tmp_path / "first.py", "duplicate_script")
-    _write_valid_script(tmp_path / "second.py", "duplicate_script")
+    _write_valid_bot(tmp_path / "first.py", "duplicate_bot")
+    _write_valid_bot(tmp_path / "second.py", "duplicate_bot")
 
     with pytest.raises(ScriptDiscoveryError, match="Duplicate") as exc_info:
         discover_scripts([tmp_path])
 
-    assert exc_info.value.details["script_name"] == "duplicate_script"
+    assert exc_info.value.details["bot_name"] == "duplicate_bot"
 
 
 def test_discover_scripts_raises_for_missing_directory(tmp_path: Path) -> None:
@@ -96,88 +94,52 @@ def test_discover_scripts_raises_for_file_configured_as_directory(tmp_path: Path
     assert exc_info.value.details == {"path": str(file_path)}
 
 
-def test_discover_scripts_raises_for_invalid_script(tmp_path: Path) -> None:
-    script_path = tmp_path / "invalid_script.py"
-    script_path.write_text(
-        """
-SCRIPT_NAME = "invalid_script"
-
-def validate(ctx):
-    pass
-
-def run(ctx):
-    pass
-""".strip(),
-        encoding="utf-8",
-    )
-
-    with pytest.raises(ScriptDiscoveryError, match="Invalid") as exc_info:
-        discover_scripts([tmp_path])
-
-    assert exc_info.value.details["path"] == str(script_path)
-
-
-def test_discover_scripts_raises_for_invalid_python_syntax(tmp_path: Path) -> None:
-    script_path = tmp_path / "broken_script.py"
-    script_path.write_text("def run(:\n", encoding="utf-8")
-
-    with pytest.raises(ScriptDiscoveryError, match="invalid Python syntax") as exc_info:
-        discover_scripts([tmp_path])
-
-    assert exc_info.value.details["path"] == str(script_path)
-
-
-def test_discover_scripts_does_not_import_or_execute_script_code(tmp_path: Path) -> None:
-    script_path = tmp_path / "safe_discovery.py"
-    script_path.write_text(
-        """
-SCRIPT_NAME = "safe_discovery"
-DESCRIPTION = "Discovery should not execute top-level code."
-
-raise RuntimeError("This would fail if discovery imported the script")
-
-def validate(ctx):
-    raise AssertionError("validate should not run during discovery")
-
-def run(ctx):
-    raise AssertionError("run should not run during discovery")
-""".strip(),
-        encoding="utf-8",
-    )
-
-    registry = discover_scripts([tmp_path])
-
-    assert registry.names() == ("safe_discovery",)
-
-
-def test_discover_scripts_ignores_non_script_files(tmp_path: Path) -> None:
-    (tmp_path / "README.md").write_text("not a script", encoding="utf-8")
-    (tmp_path / "__init__.py").write_text("", encoding="utf-8")
+def test_discover_scripts_ignores_python_files_without_bot(tmp_path: Path) -> None:
+    (tmp_path / "helpers.py").write_text("VALUE = 1", encoding="utf-8")
 
     registry = discover_scripts([tmp_path])
 
     assert registry.names() == ()
 
 
-def _write_valid_script(
+def test_discover_scripts_raises_for_import_failure(tmp_path: Path) -> None:
+    script_path = tmp_path / "broken_bot.py"
+    script_path.write_text('raise RuntimeError("boom")', encoding="utf-8")
+
+    with pytest.raises(ScriptDiscoveryError, match="could not load") as exc_info:
+        discover_scripts([tmp_path])
+
+    assert exc_info.value.details["path"] == str(script_path)
+
+
+def _write_valid_bot(
     path: Path,
-    script_name: str,
+    bot_name: str,
     *,
     description: str = "Create notifications.",
 ) -> None:
     path.write_text(
         f'''
-SCRIPT_NAME = "{script_name}"
-DESCRIPTION = "{description}"
-VERSION = "0.1.0"
-AUTHOR = "Maintenance Team"
-TAGS = ("maintenance", "notifications")
+from pydantic import BaseModel
+from saphive import bot
 
-def validate(ctx):
-    pass
+class Input(BaseModel):
+    value: str = "ok"
 
-def run(ctx):
-    pass
+class Output(BaseModel):
+    result: str
+
+@bot(
+    name="{bot_name}",
+    description="{description}",
+    input_model=Input,
+    output_model=Output,
+    version="0.1.0",
+    author="Maintenance Team",
+    tags=("maintenance", "notifications"),
+)
+def run(ctx, data):
+    return Output(result=data.value)
 '''.strip(),
         encoding="utf-8",
     )
