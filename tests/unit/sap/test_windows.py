@@ -8,7 +8,7 @@ import pytest
 
 from saphive import SapConnectionError, SapConnectionProfile, SapGuiError, SapSessionError
 from saphive.sap import SapCredentials, WindowsSapGuiClient, WindowsSapSession
-from saphive.sap.windows import _load_dispatch_factory
+from saphive.sap.windows import WindowsSapConnection, _load_dispatch_factory
 
 
 def test_windows_client_does_not_require_pywin32_until_connect() -> None:
@@ -382,6 +382,30 @@ def test_windows_opened_connection_reuses_initial_session_once_and_tracks_cleanu
     assert sap_connection.created_sessions == []
 
 
+def test_windows_connection_treats_stale_created_session_as_already_closed() -> None:
+    sap_connection = WindowsSapConnection(
+        connection_name="prd",
+        connection=FakeConnection(description="PRD", sessions=[]),
+    )
+    sap_connection.created_sessions.append(
+        WindowsSapSession(session=StaleSession(), connection_owner=sap_connection)
+    )
+
+    sap_connection.close_created_sessions()
+
+    assert sap_connection.created_sessions == []
+
+
+def test_windows_connection_close_ignores_stale_connection_fallback() -> None:
+    sap_connection = WindowsSapConnection(
+        connection_name="prd",
+        connection=StaleConnection(description="PRD"),
+        opened_by_saphive=True,
+    )
+
+    sap_connection.close_connection()
+
+
 def test_windows_connection_fails_when_com_was_uninitialized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -631,7 +655,7 @@ class DisconnectedConnection:
 
 class StaleSession:
     def __getattr__(self, name: str) -> object:
-        if name in {"findById", "StartTransaction", "CloseSession"}:
+        if name in {"Id", "findById", "StartTransaction", "CloseSession"}:
             raise AttributeError(f"<unknown>.{name}")
 
         raise AttributeError(name)

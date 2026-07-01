@@ -705,6 +705,7 @@ def _is_stale_com_proxy_error(error: Exception) -> bool:
         or "conexiones no son válidas" in normalized_message
         or "conexiones no son validas" in normalized_message
         or ("server" in normalized_message and "not available" in normalized_message)
+        or "0x800401fd" in normalized_message
         or "-2147417848" in message
         or "-2147418094" in message
         or "-2147023174" in message
@@ -727,18 +728,44 @@ def _is_retryable_sap_gui_startup_error(error: Exception) -> bool:
 
 def _close_session(session: Any) -> None:
     try:
+        session.Id
+    except Exception as exc:
+        if _is_stale_com_proxy_error(exc):
+            return
+
+    try:
         session.findById("wnd[0]").Close()
-    except Exception:
-        session.CloseSession()
+    except Exception as exc:
+        if _is_stale_com_proxy_error(exc):
+            return
+        try:
+            session.CloseSession()
+        except Exception as close_error:
+            if _is_stale_com_proxy_error(close_error):
+                return
+            raise
 
 
 def _close_connection(connection: Any) -> None:
     try:
         connection.CloseConnection()
-    except Exception:
-        session_count = int(connection.Children.Count)
+    except Exception as exc:
+        if _is_stale_com_proxy_error(exc):
+            return
+        try:
+            session_count = int(connection.Children.Count)
+        except Exception as child_count_error:
+            if _is_stale_com_proxy_error(child_count_error):
+                return
+            raise
         for index in reversed(range(session_count)):
-            _close_session(connection.Children(index))
+            try:
+                session = connection.Children(index)
+            except Exception as child_error:
+                if _is_stale_com_proxy_error(child_error):
+                    return
+                raise
+            _close_session(session)
 
 
 def _close_application(application: Any) -> None:
