@@ -350,6 +350,30 @@ def test_windows_open_connection_keeps_opened_connection_after_login() -> None:
     assert application.login_session.login_pressed is True
 
 
+def test_windows_open_connection_selects_continue_on_multiple_logon_dialog() -> None:
+    session = MultipleLogonSession()
+    opened_connection = FakeConnection(description="PRD", sessions=[session])
+    application = FakeOpenApplication(
+        connections=[opened_connection],
+        opened_connection=opened_connection,
+    )
+
+    def dispatch(name: str) -> FakeApplication:
+        assert name == "SAPGUI"
+        return application
+
+    WindowsSapGuiClient(dispatch_factory=dispatch).open_connection(
+        "prd",
+        SapConnectionProfile(sap_logon_name="PRD", client="300", language="ES"),
+        SapCredentials(username="INV10018", password="secret"),
+    )
+
+    assert session.radio_buttons[0].selected is False
+    assert session.radio_buttons[1].selected is True
+    assert session.radio_buttons[2].selected is False
+    assert session.ok_button.pressed is True
+
+
 def test_windows_opened_connection_reuses_initial_session_once_and_tracks_cleanup() -> None:
     opened_connection = FakeConnection(description="PRD", sessions=[])
     initial_session = GrowingComSession(opened_connection.Children)
@@ -767,6 +791,26 @@ class FakeComSession:
         return element
 
 
+class MultipleLogonSession(FakeComSession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.dialog = FakeElement()
+        self.radio_buttons = [FakeRadioButton(), FakeRadioButton(), FakeRadioButton()]
+        self.user_area = FakeElement()
+        self.user_area.Children = FakeChildren(self.radio_buttons)
+        self.ok_button = FakeElement()
+
+    def _find_by_id(self, element_id: str) -> "FakeElement":
+        if element_id == "wnd[1]":
+            return self.dialog
+        if element_id == "wnd[1]/usr":
+            return self.user_area
+        if element_id == "wnd[1]/tbar[0]/btn[0]":
+            return self.ok_button
+
+        return super()._find_by_id(element_id)
+
+
 class GrowingComSession(FakeComSession):
     def __init__(self, children: FakeChildren) -> None:
         super().__init__()
@@ -793,6 +837,16 @@ class FakeElement:
 
     def press(self) -> None:
         self.pressed = True
+
+
+class FakeRadioButton(FakeElement):
+    def __init__(self) -> None:
+        super().__init__()
+        self.Type = "GuiRadioButton"
+        self.selected = False
+
+    def Select(self) -> None:  # noqa: N802 - SAP GUI COM method name.
+        self.selected = True
 
 
 class CallbackElement(FakeElement):

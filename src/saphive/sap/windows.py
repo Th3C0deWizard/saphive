@@ -21,6 +21,8 @@ T = TypeVar("T")
 SAP_GUI_START_TIMEOUT_SECONDS = 10.0
 SAP_GUI_POLL_SECONDS = 0.5
 SAP_SESSION_CREATE_TIMEOUT_SECONDS = 10.0
+MIN_MULTIPLE_LOGON_RADIO_BUTTONS = 2
+MULTIPLE_LOGON_CONTINUE_RADIO_INDEX = 1
 SAP_LOGON_EXECUTABLE_CANDIDATES = (
     Path("C:/Program Files/SAP/FrontEnd/SAPgui/saplogon.exe"),
     Path("C:/Program Files (x86)/SAP/FrontEnd/SAPgui/saplogon.exe"),
@@ -102,6 +104,7 @@ class WindowsSapGuiClient:
             connection = application.OpenConnection(profile.sap_logon_name, True)
             session = _wait_for_connection_child(connection, 0)
             _login(session, profile, credentials)
+            _handle_multiple_logon_dialog(session)
             _wait_for_session_ready(session)
         except Exception as exc:
             raise SapConnectionError(
@@ -728,7 +731,7 @@ def _is_retryable_sap_gui_startup_error(error: Exception) -> bool:
 
 def _close_session(session: Any) -> None:
     try:
-        session.Id
+        _ = session.Id
     except Exception as exc:
         if _is_stale_com_proxy_error(exc):
             return
@@ -780,3 +783,63 @@ def _login(session: Any, profile: Any, credentials: SapCredentials) -> None:
     session.findById("wnd[0]/usr/pwdRSYST-BCODE").Text = credentials.password
     session.findById("wnd[0]/usr/txtRSYST-LANGU").Text = profile.language
     session.findById("wnd[0]/tbar[0]/btn[0]").press()
+
+
+def _handle_multiple_logon_dialog(session: Any) -> None:
+    dialog = _find_optional_element(session, "wnd[1]")
+    if dialog is None:
+        return
+
+    user_area = _find_optional_element(session, "wnd[1]/usr")
+    if user_area is None:
+        return
+
+    radio_buttons = [
+        element
+        for element in _iter_gui_children(user_area)
+        if str(getattr(element, "Type", "")) == "GuiRadioButton"
+    ]
+    if len(radio_buttons) < MIN_MULTIPLE_LOGON_RADIO_BUTTONS:
+        return
+
+    _select_radio_button(radio_buttons[MULTIPLE_LOGON_CONTINUE_RADIO_INDEX])
+    ok_button = _find_optional_element(session, "wnd[1]/tbar[0]/btn[0]")
+    if ok_button is not None:
+        ok_button.press()
+        return
+
+    with suppress(Exception):
+        dialog.SendVKey(0)
+
+
+def _find_optional_element(session: Any, element_id: str) -> Any | None:
+    with suppress(Exception):
+        return session.findById(element_id)
+
+    return None
+
+
+def _iter_gui_children(element: Any) -> Iterator[Any]:
+    try:
+        children = getattr(element, "Children", None)
+    except Exception:
+        return
+
+    if children is None:
+        return
+
+    with suppress(Exception):
+        count = int(children.Count)
+        for index in range(count):
+            child = children(index)
+            yield child
+            yield from _iter_gui_children(child)
+
+
+def _select_radio_button(radio_button: Any) -> None:
+    select = getattr(radio_button, "Select", None)
+    if callable(select):
+        select()
+        return
+
+    radio_button.Selected = True
