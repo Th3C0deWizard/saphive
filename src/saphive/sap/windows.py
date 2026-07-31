@@ -8,6 +8,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
+from threading import local
 from typing import Any, TypeVar
 
 from saphive.core.com import ComRuntime
@@ -27,6 +28,7 @@ SAP_LOGON_EXECUTABLE_CANDIDATES = (
     Path("C:/Program Files/SAP/FrontEnd/SAPgui/saplogon.exe"),
     Path("C:/Program Files (x86)/SAP/FrontEnd/SAPgui/saplogon.exe"),
 )
+_com_state = local()
 
 
 @contextmanager
@@ -44,6 +46,15 @@ def sap_com_initialized() -> Iterator[ComRuntime]:
             details={"missing_dependency": "pywin32"},
         ) from exc
 
+    depth = getattr(_com_state, "depth", 0)
+    if depth:
+        _com_state.depth = depth + 1
+        try:
+            yield ComRuntime(enabled=True)
+        finally:
+            _com_state.depth = depth
+        return
+
     try:
         pythoncom.CoInitialize()
     except Exception as exc:
@@ -52,9 +63,11 @@ def sap_com_initialized() -> Iterator[ComRuntime]:
             details={"error": str(exc)},
         ) from exc
 
+    _com_state.depth = 1
     try:
         yield ComRuntime(enabled=True)
     finally:
+        _com_state.depth = 0
         with suppress(Exception):
             pythoncom.CoUninitialize()
 

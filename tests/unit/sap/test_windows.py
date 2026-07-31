@@ -8,7 +8,11 @@ import pytest
 
 from saphive import SapConnectionError, SapConnectionProfile, SapGuiError, SapSessionError
 from saphive.sap import SapCredentials, WindowsSapGuiClient, WindowsSapSession
-from saphive.sap.windows import WindowsSapConnection, _load_dispatch_factory
+from saphive.sap.windows import (
+    WindowsSapConnection,
+    _load_dispatch_factory,
+    sap_com_initialized,
+)
 
 
 def test_windows_client_does_not_require_pywin32_until_connect() -> None:
@@ -473,6 +477,30 @@ def test_windows_connection_fails_when_com_was_uninitialized(
 
     assert session.created_sessions == 0
     assert events == []
+
+
+def test_sap_com_initialized_is_reentrant(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+
+    def co_initialize() -> None:
+        events.append("init")
+
+    def co_uninitialize() -> None:
+        events.append("uninit")
+
+    def fake_import_module(name: str) -> object:
+        assert name == "pythoncom"
+        return SimpleNamespace(CoInitialize=co_initialize, CoUninitialize=co_uninitialize)
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr("saphive.sap.windows.import_module", fake_import_module)
+
+    with sap_com_initialized():
+        with sap_com_initialized():
+            assert events == ["init"]
+        assert events == ["init"]
+
+    assert events == ["init", "uninit"]
 
 
 def test_windows_connection_fails_on_stale_com_proxy() -> None:
